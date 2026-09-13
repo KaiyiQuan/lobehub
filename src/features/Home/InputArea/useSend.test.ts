@@ -86,8 +86,8 @@ const homeDailyBriefState = vi.hoisted(() => ({
 
 const createNoteMock = vi.hoisted(() => vi.fn());
 const initNotesMock = vi.hoisted(() => vi.fn());
-const updateNoteContentMock = vi.hoisted(() => vi.fn());
 const minimalLayoutMock = vi.hoisted(() => ({ value: false }));
+const permissionMock = vi.hoisted(() => ({ allowed: true }));
 
 const activeWorkspaceSlugMock = vi.hoisted(() => ({
   value: null as string | null,
@@ -102,7 +102,7 @@ vi.mock('@lobehub/ui/base-ui', async (importOriginal) => ({
 }));
 
 vi.mock('@/hooks/usePermission', () => ({
-  usePermission: () => ({ allowed: true, reason: '' }),
+  usePermission: () => ({ allowed: permissionMock.allowed, reason: '' }),
 }));
 
 vi.mock('@/business/client/hooks/useActiveWorkspaceId', () => ({
@@ -183,7 +183,6 @@ vi.mock('@/store/quickNote', () => ({
     getState: () => ({
       createNote: createNoteMock,
       initNotes: initNotesMock,
-      updateNoteContent: updateNoteContentMock,
     }),
   },
 }));
@@ -218,7 +217,7 @@ describe('Home InputArea useSend', () => {
     activeWorkspaceIdMock.value = null;
     createNoteMock.mockReset();
     initNotesMock.mockReset();
-    updateNoteContentMock.mockReset();
+    permissionMock.allowed = true;
     minimalLayoutMock.value = false;
   });
 
@@ -237,12 +236,30 @@ describe('Home InputArea useSend', () => {
     });
 
     expect(initNotesMock).toHaveBeenCalledTimes(1);
-    expect(createNoteMock).toHaveBeenCalledTimes(1);
-    expect(updateNoteContentMock).toHaveBeenCalledWith('note-1', '随手记一条');
+    expect(createNoteMock).toHaveBeenCalledWith('随手记一条', { type: 'doc' });
     expect(sendMessageMock).not.toHaveBeenCalled();
     expect(createTaskMock).not.toHaveBeenCalled();
     expect(routerMock.push).not.toHaveBeenCalled();
     expect(clearContentMock).toHaveBeenCalledTimes(1);
+  });
+
+  /** @example Personal Quick Notes remain available when shared-content creation is restricted. */
+  it('creates a quick note without create-content permission', async () => {
+    permissionMock.allowed = false;
+    createNoteMock.mockResolvedValue('note-restricted');
+    const { result } = renderHook(() => useSend('note'));
+
+    await act(async () => {
+      await result.current.send({
+        clearContent: vi.fn(),
+        editor: {} as Parameters<SendButtonHandler>[0]['editor'],
+        getEditorData: () => ({ type: 'doc' }),
+        getMarkdownContent: () => 'private note',
+      });
+    });
+
+    /** @example The Note branch bypasses the shared-content permission guard. */
+    expect(createNoteMock).toHaveBeenCalledWith('private note', { type: 'doc' });
   });
 
   it('routes to the note detail when created from the minimal layout', async () => {

@@ -1,7 +1,7 @@
 'use client';
 
-import { ActionIcon, Block, DropdownMenu, Flexbox, Icon, stopPropagation, Text } from '@lobehub/ui';
-import { confirmModal } from '@lobehub/ui/base-ui';
+import { Block, DropdownMenu, Flexbox, Icon, stopPropagation } from '@lobehub/ui';
+import { ActionIcon, confirmModal, Text } from '@lobehub/ui/base-ui';
 import { MoreHorizontalIcon, NotebookPenIcon, Trash } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';

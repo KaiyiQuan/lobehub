@@ -126,7 +126,7 @@ export const useSend = (mode: HomeMode = 'chat') => {
         ? undefined
         : (getEditorData?.() ?? mainInputEditor?.getJSONState());
 
-      if (!canCreateContent) return;
+      if (mode !== 'note' && !canCreateContent) return;
 
       if (mode !== 'note' && (mode === 'task' || !inputActiveMode) && !canUseResource) return;
 
@@ -153,12 +153,11 @@ export const useSend = (mode: HomeMode = 'chat') => {
         if (mode === 'note') {
           if (!message) return;
           setIsSubmitting(true);
-          const { createNote, initNotes, updateNoteContent } = useQuickNoteStore.getState();
-          // A note created before the mock store hydrates would be overwritten
-          // by the hydration snapshot, so settle initNotes first.
+          const { createNote, initNotes } = useQuickNoteStore.getState();
+          // A note created before the store hydrates would be overwritten by the
+          // hydration snapshot, so settle initNotes first.
           await initNotes();
-          const noteId = await createNote();
-          updateNoteContent(noteId, message);
+          const noteId = await createNote(message, editorData);
           submitted = true;
           if (minimalLayout) router.push(`/note/${noteId}`);
           return;

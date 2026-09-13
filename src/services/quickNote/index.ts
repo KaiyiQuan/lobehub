@@ -130,9 +130,12 @@ class QuickNoteService {
     return notes.map((note) => normalizeQuickNote(note as ServerQuickNoteItem));
   };
 
-  createNote = async (): Promise<QuickNoteItem> => {
-    const note = await lambdaClient.quickNote.create.mutate({ content: '', tags: [] });
-    return normalizeQuickNote({ ...note, content: '', editorData: undefined });
+  createNote = async (
+    content = '',
+    editorData?: Record<string, unknown>,
+  ): Promise<QuickNoteItem> => {
+    const note = await lambdaClient.quickNote.create.mutate({ content, editorData, tags: [] });
+    return normalizeQuickNote({ ...note, content, editorData });
   };
 
   getAgenticDetails = async (id: string): Promise<QuickNoteAgenticDetails> => {

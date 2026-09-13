@@ -58,46 +58,58 @@ export class QuickNoteActionImpl {
   }
 
   initNotes = async () => {
-    if (this.#get().notesInit) return;
-    const notes = await quickNoteService.getNotes();
-    const divingNoteIds = notes
-      .filter(
-        (note) => note.run?.kind === 'dive' && ['pending', 'running'].includes(note.run.status),
-      )
-      .map((note) => note.id);
-    const analyzingActiveNoteIds = notes
-      .filter(
-        (note) => note.run?.kind === 'analyze' && ['pending', 'running'].includes(note.run.status),
-      )
-      .map((note) => note.id);
-    this.#set(
-      {
-        divingNoteIds,
-        notes,
-        notesInit: true,
-      },
-      false,
-      'initNotes',
-    );
-    for (const id of divingNoteIds) {
-      this.#diveBaselineAnnotationTimes.set(
-        id,
-        notes.find((note) => note.id === id)?.annotation?.divedAt,
+    if (this.#get().notesInit && !this.#get().notesLoadError) return;
+    this.#set({ notesLoadError: false }, false, 'initNotes/start');
+
+    try {
+      const notes = await quickNoteService.getNotes();
+      const divingNoteIds = notes
+        .filter(
+          (note) => note.run?.kind === 'dive' && ['pending', 'running'].includes(note.run.status),
+        )
+        .map((note) => note.id);
+      const analyzingActiveNoteIds = notes
+        .filter(
+          (note) =>
+            note.run?.kind === 'analyze' && ['pending', 'running'].includes(note.run.status),
+        )
+        .map((note) => note.id);
+      this.#set(
+        {
+          divingNoteIds,
+          notes,
+          notesInit: true,
+          notesLoadError: false,
+        },
+        false,
+        'initNotes/success',
       );
-      this.#scheduleDivePoll(id);
-    }
-    for (const id of analyzingActiveNoteIds) this.#scheduleAnalyzePoll(id);
-    for (const note of notes) {
-      if (note.analyzeDueAt && !analyzingActiveNoteIds.includes(note.id)) {
-        this.#scheduleAnalyze(note.id, note.analyzeDueAt);
+      for (const id of divingNoteIds) {
+        this.#diveBaselineAnnotationTimes.set(
+          id,
+          notes.find((note) => note.id === id)?.annotation?.divedAt,
+        );
+        this.#scheduleDivePoll(id);
       }
+      for (const id of analyzingActiveNoteIds) this.#scheduleAnalyzePoll(id);
+      for (const note of notes) {
+        if (note.analyzeDueAt && !analyzingActiveNoteIds.includes(note.id)) {
+          this.#scheduleAnalyze(note.id, note.analyzeDueAt);
+        }
+      }
+    } catch {
+      this.#set({ notesInit: true, notesLoadError: true }, false, 'initNotes/failed');
     }
   };
 
-  createNote = async (): Promise<string> => {
-    const note = await quickNoteService.createNote();
+  createNote = async (content = '', editorData?: Record<string, unknown>): Promise<string> => {
+    const note = await quickNoteService.createNote(content, editorData);
     this.#set({ notes: [note, ...this.#get().notes] }, false, 'createNote');
     return note.id;
+  };
+
+  flushPendingWrites = async (): Promise<void> => {
+    await this.#persist.flush();
   };
 
   useFetchAgenticDetails = (id?: string) =>

@@ -9,6 +9,7 @@ import { useQuickNoteStore } from '@/store/quickNote';
 import NoteList from '../NoteList';
 import Sidebar from './Sidebar';
 import { styles } from './style';
+import { useQuickNotePersistenceLifecycle } from './useQuickNotePersistenceLifecycle';
 
 const NoteLayout: FC = () => {
   const initNotes = useQuickNoteStore((s) => s.initNotes);
@@ -16,6 +17,8 @@ const NoteLayout: FC = () => {
   useEffect(() => {
     initNotes();
   }, [initNotes]);
+
+  useQuickNotePersistenceLifecycle();
 
   return (
     <>

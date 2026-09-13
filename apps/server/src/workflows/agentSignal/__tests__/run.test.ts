@@ -20,6 +20,13 @@ vi.mock('@/server/services/agentSignal/featureGate', () => ({
   isAgentSignalEnabledForUser: vi.fn().mockResolvedValue(true),
 }));
 
+// ROOT CAUSE:
+//
+// The first in-test getTestDB() call could spend the complete five-second test timeout on cold
+// schema initialization. Initializing the shared database during module collection keeps the test
+// timeout focused on workflow behavior; getTestDB() remains cached for the later cases in this file.
+const sharedTestDB = await getTestDB();
+
 const createWorkflowContext = <TPayload>(requestPayload: TPayload) => {
   return {
     requestPayload,
@@ -85,7 +92,7 @@ const createNightlyReviewContext = (input: {
 describe('runAgentSignalWorkflow', () => {
   /** @example A Quick Note Signal snapshot points to the Agent operation it dispatched. */
   it('records terminal operation linkage in workflow snapshots', async () => {
-    const db = await getTestDB();
+    const db = sharedTestDB;
     const userId = `eval_${uuid()}`;
     const quickNoteId = 'qn_trace_1';
     const runId = '11111111-1111-1111-1111-111111111111';
@@ -127,7 +134,7 @@ describe('runAgentSignalWorkflow', () => {
     });
     const executeSourceEvent: NonNullable<RunAgentSignalWorkflowDeps['executeSourceEvent']> = vi.fn(
       async () => ({
-        deduped: false,
+        deduped: false as const,
         orchestration: {
           actions: [],
           emittedSignals: [],

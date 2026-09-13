@@ -10,6 +10,7 @@ describe('createQuickNoteAnalyzeSourceHandler', () => {
     const handler = createQuickNoteAnalyzeSourceHandler({ dispatch });
 
     const result = await handler.handle({
+      chain: { chainId: 'chain:qn_1', rootSourceId: '11111111-1111-1111-1111-111111111111' },
       payload: {
         quickNoteId: 'qn_1',
         runId: '11111111-1111-1111-1111-111111111111',
@@ -46,6 +47,7 @@ describe('createQuickNoteAnalyzeSourceHandler', () => {
     });
 
     const result = await handler.handle({
+      chain: { chainId: 'chain:qn_1', rootSourceId: '11111111-1111-1111-1111-111111111111' },
       payload: {
         quickNoteId: 'qn_1',
         runId: '11111111-1111-1111-1111-111111111111',

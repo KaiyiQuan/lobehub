@@ -1,11 +1,13 @@
 'use client';
 
-import { Flexbox, SearchBar, Text } from '@lobehub/ui';
+import { Flexbox, SearchBar } from '@lobehub/ui';
+import { Text } from '@lobehub/ui/base-ui';
 import { memo, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useQuickNoteStore } from '@/store/quickNote';
 
+import LoadError from '../../QuickNote/LoadError';
 import FeedItem from './FeedItem';
 
 const NotesFeed = memo(() => {
@@ -13,6 +15,7 @@ const NotesFeed = memo(() => {
   const initNotes = useQuickNoteStore((s) => s.initNotes);
   const notes = useQuickNoteStore((s) => s.notes);
   const notesInit = useQuickNoteStore((s) => s.notesInit);
+  const notesLoadError = useQuickNoteStore((s) => s.notesLoadError);
   const [keywords, setKeywords] = useState('');
 
   useEffect(() => {
@@ -27,6 +30,7 @@ const NotesFeed = memo(() => {
   }, [notes, keywords]);
 
   if (!notesInit) return null;
+  if (notesLoadError) return <LoadError />;
 
   return (
     <Flexbox gap={16}>

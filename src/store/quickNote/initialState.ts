@@ -21,6 +21,8 @@ export interface QuickNoteState {
   listCollapsed: boolean;
   notes: QuickNoteItem[];
   notesInit: boolean;
+  /** Whether the latest initial note-list request failed and can be retried. */
+  notesLoadError: boolean;
   /** Proposal identifiers currently being edited or decided. */
   processingProposalIds: string[];
   saveStatus: QuickNoteSaveStatus;
@@ -39,6 +41,7 @@ export const initialState: QuickNoteState = {
   listCollapsed: false,
   notes: [],
   notesInit: false,
+  notesLoadError: false,
   processingProposalIds: [],
   saveStatus: 'idle',
   searchKeywords: '',

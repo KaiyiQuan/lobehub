@@ -119,6 +119,29 @@ describe('quickNote actions', () => {
     expect(useQuickNoteStore.getState().notesInit).toBe(true);
   });
 
+  /** @example A rejected list request settles the UI and can be retried. */
+  it('records an initialization error and retries it', async () => {
+    const seeded = [createNoteItem({ id: 'recovered' })];
+    const getNotes = vi
+      .spyOn(quickNoteService, 'getNotes')
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(seeded);
+
+    await useQuickNoteStore.getState().initNotes();
+
+    /** @example The list leaves its loading skeleton after a failed request. */
+    expect(useQuickNoteStore.getState().notesInit).toBe(true);
+    /** @example The shared list surfaces receive a retryable error flag. */
+    expect(useQuickNoteStore.getState().notesLoadError).toBe(true);
+
+    await useQuickNoteStore.getState().initNotes();
+
+    /** @example Retry replaces the failure state with the server result. */
+    expect(getNotes).toHaveBeenCalledTimes(2);
+    expect(useQuickNoteStore.getState().notes).toEqual(seeded);
+    expect(useQuickNoteStore.getState().notesLoadError).toBe(false);
+  });
+
   /** @example An active Dive restored from the server keeps polling until its operation finishes. */
   it('resumes polling an active Dive after initialization', async () => {
     const running = createNoteItem({
@@ -148,10 +171,23 @@ describe('quickNote actions', () => {
   });
 
   it('createNote prepends the server-created note', async () => {
-    const id = await useQuickNoteStore.getState().createNote();
+    const id = await useQuickNoteStore.getState().createNote('saved at creation', { revision: 1 });
 
     expect(useQuickNoteStore.getState().notes[0].id).toBe(id);
-    expect(quickNoteService.createNote).toHaveBeenCalledTimes(1);
+    expect(quickNoteService.createNote).toHaveBeenCalledWith('saved at creation', { revision: 1 });
+  });
+
+  /** @example Route teardown flushes a pending editor revision before the debounce expires. */
+  it('flushes pending editor writes on demand', async () => {
+    resetStore({ notes: [createNoteItem({ id: 'a' })], notesInit: true });
+
+    useQuickNoteStore.getState().updateNoteContent('a', 'leaving now', { revision: 2 });
+    await useQuickNoteStore.getState().flushPendingWrites();
+
+    /** @example The server receives the pending revision without advancing the debounce timer. */
+    expect(quickNoteService.updateNoteContent).toHaveBeenCalledWith('a', 'leaving now', {
+      revision: 2,
+    });
   });
 
   it('updateNoteContent tracks save status through the debounce window', async () => {

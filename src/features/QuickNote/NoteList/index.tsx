@@ -1,7 +1,7 @@
 'use client';
 
-import { ActionIcon, Flexbox, Icon, ScrollShadow, Text } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
+import { Flexbox, Icon, ScrollShadow } from '@lobehub/ui';
+import { ActionIcon, Button, Text } from '@lobehub/ui/base-ui';
 import { cssVar } from 'antd-style';
 import { NotebookPenIcon, PanelLeftCloseIcon, PanelLeftOpenIcon } from 'lucide-react';
 import { memo } from 'react';
@@ -10,6 +10,7 @@ import { useTranslation } from 'react-i18next';
 import SkeletonList from '@/features/NavPanel/components/SkeletonList';
 import { quickNoteSelectors, UNCATEGORIZED_KEY, useQuickNoteStore } from '@/store/quickNote';
 
+import LoadError from '../LoadError';
 import NewNoteButton from '../NoteLayout/NewNoteButton';
 import { styles } from '../NoteLayout/style';
 import { useCreateNote } from '../useCreateNote';
@@ -52,6 +53,7 @@ const NoteList = memo(() => {
 
   const notes = useQuickNoteStore(quickNoteSelectors.filteredNotes);
   const notesInit = useQuickNoteStore((s) => s.notesInit);
+  const notesLoadError = useQuickNoteStore((s) => s.notesLoadError);
   const searchKeywords = useQuickNoteStore((s) => s.searchKeywords);
   const [activeCollection, activeTag, listCollapsed, toggleListCollapsed] = useQuickNoteStore(
     (s) => [s.activeCollection, s.activeTag, s.listCollapsed, s.toggleListCollapsed],
@@ -102,7 +104,9 @@ const NoteList = memo(() => {
           />
         </Flexbox>
       </Flexbox>
-      {notesInit ? (
+      {notesLoadError ? (
+        <LoadError />
+      ) : notesInit ? (
         <ScrollShadow flex={1} size={4}>
           {notes.length === 0 ? (
             <EmptyState searchActive={Boolean(searchKeywords.trim())} />

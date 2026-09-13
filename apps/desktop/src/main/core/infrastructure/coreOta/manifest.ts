@@ -108,3 +108,15 @@ export const isValidManifestShape = (value: unknown): value is CoreManifest =>
 
 export const sha256File = (content: Buffer): string =>
   createHash('sha256').update(content).digest('hex');
+
+export const findMissingEntryAssets = (
+  html: string,
+  exists: (relPath: string) => boolean,
+): string[] => {
+  const refs = [...html.matchAll(/(?:src|href)="\.?\/([^"]+\.(?:m?js|css))"/g)].map(
+    (match) => match[1],
+  );
+  const missing = refs.filter((ref) => !exists(ref));
+  if (!refs.some((ref) => /\.m?js$/.test(ref))) missing.push('<no script referenced>');
+  return missing;
+};

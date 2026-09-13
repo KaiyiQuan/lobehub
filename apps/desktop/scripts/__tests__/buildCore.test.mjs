@@ -13,7 +13,7 @@ import {
   coreManifestSchema,
   verifyManifestSignature,
 } from '../../src/main/core/infrastructure/coreOta/manifest';
-import { applyZstdPatch } from '../../src/main/core/infrastructure/rendererOta/zstdPatch';
+import { applyZstdPatch } from '../../src/main/core/infrastructure/coreOta/zstdPatch';
 import { buildCore, EmptyReleaseError } from '../buildCore.mjs';
 import { decodePack } from '../buildRendererManifest.mjs';
 

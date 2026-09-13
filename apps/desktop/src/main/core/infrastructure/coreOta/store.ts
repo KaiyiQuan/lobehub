@@ -6,9 +6,8 @@ import { zstdDecompress } from 'node:zlib';
 
 import { unzip } from 'fflate';
 
-import { findMissingEntryAssets } from '../rendererOta/manifest';
-import { applyZstdPatch } from '../rendererOta/zstdPatch';
-import { type CoreManifest, sha256File } from './manifest';
+import { type CoreManifest, findMissingEntryAssets, sha256File } from './manifest';
+import { applyZstdPatch } from './zstdPatch';
 
 type FetchImpl = (url: string) => Promise<Response>;
 type LocalCore = { dir: string; manifest: CoreManifest };

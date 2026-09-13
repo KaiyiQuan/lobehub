@@ -123,7 +123,6 @@ const PageEditorRightPanel = memo(() => {
 
   return (
     <RightPanel
-      stableLayout
       defaultWidth={width}
       expand={effectiveExpand}
       onExpandChange={(next) => toggle(next)}

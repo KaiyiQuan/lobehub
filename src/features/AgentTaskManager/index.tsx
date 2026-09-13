@@ -31,7 +31,6 @@ const AgentTaskManager = memo<AgentTaskManagerProps>(({ preferredAgentId, viewed
 
   return (
     <RightPanel
-      stableLayout
       defaultWidth={420}
       expand={expand || showPortalInTaskPanel}
       maxWidth={720}

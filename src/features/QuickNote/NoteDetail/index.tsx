@@ -30,7 +30,7 @@ const NoteDetail = memo<{ id: string }>(({ id }) => {
   return (
     <Flexbox horizontal height={'100%'} width={'100%'}>
       <EditorArea noteId={id} />
-      <RightPanel stableLayout expand={panelExpanded} onExpandChange={toggleAnnotationPanel}>
+      <RightPanel expand={panelExpanded} onExpandChange={toggleAnnotationPanel}>
         <AnnotationPanel noteId={id} />
       </RightPanel>
       {topicDrawerOpen && (

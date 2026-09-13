@@ -1134,6 +1134,7 @@ describe('FileModel', () => {
 
     it('should charge rows sharing a file hash only once', async () => {
       await serverDB.insert(globalFiles).values({
+        creator: userId,
         hashId: 'dup-hash',
         fileType: 'video/mp4',
         size: 1000,

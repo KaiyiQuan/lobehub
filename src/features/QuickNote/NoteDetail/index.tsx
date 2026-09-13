@@ -1,15 +1,19 @@
 'use client';
 
 import { Flexbox } from '@lobehub/ui';
-import { memo } from 'react';
+import { lazy, memo, Suspense } from 'react';
 
 import ContentLoading from '@/components/Loading/ContentLoading';
 import RightPanel from '@/features/RightPanel';
 import { quickNoteSelectors, useQuickNoteStore } from '@/store/quickNote';
+import { useTaskStore } from '@/store/task';
+import { taskDetailSelectors } from '@/store/task/selectors';
 
 import NotePlaceholder from '../NotePlaceholder';
 import AnnotationPanel from './AnnotationPanel';
 import EditorArea from './EditorArea';
+
+const TopicChatDrawer = lazy(() => import('@/features/AgentTasks/AgentTaskDetail/TopicChatDrawer'));
 
 const NoteDetail = memo<{ id: string }>(({ id }) => {
   const notesInit = useQuickNoteStore((s) => s.notesInit);
@@ -18,6 +22,7 @@ const NoteDetail = memo<{ id: string }>(({ id }) => {
     s.annotationPanelExpanded,
     s.toggleAnnotationPanel,
   ]);
+  const topicDrawerOpen = useTaskStore(taskDetailSelectors.activeTopicDrawerTopicId);
 
   if (!notesInit) return <ContentLoading />;
   if (!exists) return <NotePlaceholder />;
@@ -28,6 +33,11 @@ const NoteDetail = memo<{ id: string }>(({ id }) => {
       <RightPanel stableLayout expand={panelExpanded} onExpandChange={toggleAnnotationPanel}>
         <AnnotationPanel noteId={id} />
       </RightPanel>
+      {topicDrawerOpen && (
+        <Suspense>
+          <TopicChatDrawer />
+        </Suspense>
+      )}
     </Flexbox>
   );
 });

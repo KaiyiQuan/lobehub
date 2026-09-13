@@ -1,4 +1,4 @@
-import type { QuickNoteItem } from '@/services/quickNote';
+import type { QuickNoteAgenticDetails, QuickNoteItem } from '@/services/quickNote';
 
 export type QuickNoteSaveStatus = 'failed' | 'idle' | 'saved' | 'saving';
 
@@ -8,11 +8,21 @@ export interface QuickNoteState {
   activeCollection: string | null;
   activeNoteId?: string;
   activeTag: string | null;
+  /** Agent sidecar data cached independently for each opened Quick Note. */
+  agenticDetailMap: Record<string, QuickNoteAgenticDetails>;
+  /** Note identifiers whose explicit Analyze request is in flight. */
+  analyzingNoteIds: string[];
   annotationPanelExpanded: boolean;
+  /** Note identifiers whose feedback submission is in flight. */
+  creatingCommentNoteIds: string[];
   divingNoteIds: string[];
+  /** Comment identifiers whose latest edit is being persisted. */
+  editingCommentIds: string[];
   listCollapsed: boolean;
   notes: QuickNoteItem[];
   notesInit: boolean;
+  /** Proposal identifiers currently being edited or decided. */
+  processingProposalIds: string[];
   saveStatus: QuickNoteSaveStatus;
   searchKeywords: string;
 }
@@ -20,11 +30,16 @@ export interface QuickNoteState {
 export const initialState: QuickNoteState = {
   activeCollection: null,
   activeTag: null,
+  agenticDetailMap: {},
+  analyzingNoteIds: [],
   annotationPanelExpanded: true,
+  creatingCommentNoteIds: [],
   divingNoteIds: [],
+  editingCommentIds: [],
   listCollapsed: false,
   notes: [],
   notesInit: false,
+  processingProposalIds: [],
   saveStatus: 'idle',
   searchKeywords: '',
 };

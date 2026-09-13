@@ -115,7 +115,7 @@ export const emitAgentSignalSourceEvent = async <TSourceType extends AgentSignal
   options: AgentSignalEmitOptions = {},
 ): Promise<DedupedSourceEventResult | GeneratedAgentSignalEmissionResult | undefined> => {
   const selfIterationEnabled =
-    input.sourceType === AGENT_SIGNAL_SOURCE_TYPES.quickNoteDiscoveryRequested ||
+    input.sourceType === AGENT_SIGNAL_SOURCE_TYPES.quickNoteAnalyzeRequested ||
     (await isAgentSignalEnabledForUser(context.db, context.userId));
 
   if (!selfIterationEnabled) {
@@ -163,7 +163,7 @@ export const enqueueAgentSignalSourceEvent = async <TSourceType extends AgentSig
   }
 
   if (
-    input.sourceType !== AGENT_SIGNAL_SOURCE_TYPES.quickNoteDiscoveryRequested &&
+    input.sourceType !== AGENT_SIGNAL_SOURCE_TYPES.quickNoteAnalyzeRequested &&
     !(await isAgentSignalEnabledForUser(db, context.userId))
   ) {
     return {

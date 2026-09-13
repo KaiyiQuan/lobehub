@@ -132,13 +132,13 @@ const createPolicyOptions = (
     classifierDiagnostics: policyOptions?.classifierDiagnostics,
     nightlyReview: policyOptions?.nightlyReview,
     procedure: procedurePolicyOptions,
-    quickNoteDiscovery: {
+    quickNoteAnalyze: {
       dispatch: (runId) =>
         new QuickNoteProcessingService(
           context.db,
           context.userId,
           context.workspaceId,
-        ).dispatchDiscoveryRun(runId),
+        ).dispatchAnalyzeRun(runId),
     },
     selfFeedbackIntent: policyOptions?.selfFeedbackIntent,
     selfReflection: policyOptions?.selfReflection,

@@ -22,11 +22,6 @@ export interface UserGeneralConfig {
    */
   enableMessageLinkIcon?: boolean;
   /**
-   * Whether saved Quick Notes become eligible for lightweight background Discovery.
-   * @default false
-   */
-  enableQuickNoteAutomaticDiscovery?: boolean;
-  /**
    * Whether a turn's tool workflow starts expanded while the agent is still
    * running. Off keeps the running turn to a single live headline row.
    * @default false

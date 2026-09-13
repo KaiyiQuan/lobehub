@@ -1,7 +1,7 @@
 'use client';
 
-import { Flexbox, Markdown, Text } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
+import { Flexbox, Markdown } from '@lobehub/ui';
+import { Button, Text } from '@lobehub/ui/base-ui';
 import { cssVar } from 'antd-style';
 import { memo, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next';
 import { quickNoteSelectors, useQuickNoteStore } from '@/store/quickNote';
 
 import { formatNoteTime } from '../utils';
+import AgenticDetails from './AgenticDetails';
 import { styles } from './style';
 
 const MetaRow = memo<{ label: string; value: string }>(({ label, value }) => (
@@ -93,6 +94,7 @@ const AnnotationPanel = memo<{ noteId: string }>(({ noteId }) => {
             {note.content.trim() ? t('annotation.waiting') : t('annotation.emptyNote')}
           </Text>
         )}
+        <AgenticDetails noteId={noteId} />
       </Flexbox>
     </Flexbox>
   );

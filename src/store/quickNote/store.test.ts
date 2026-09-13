@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { type QuickNoteItem, quickNoteService } from '@/services/quickNote';
 
-import { DIVE_POLL_INTERVAL, PERSIST_DEBOUNCE } from './action';
+import {
+  ANALYZE_POLL_INTERVAL,
+  ANALYZE_SETTLE_DELAY,
+  DIVE_POLL_INTERVAL,
+  PERSIST_DEBOUNCE,
+} from './action';
 import { initialState, type QuickNoteState } from './initialState';
 import { quickNoteSelectors } from './selectors';
 import { useQuickNoteStore } from './store';
@@ -82,7 +87,7 @@ describe('quickNote actions', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     resetStore();
-    vi.spyOn(quickNoteService, 'claimDiscovery').mockResolvedValue({ accepted: false });
+    vi.spyOn(quickNoteService, 'analyze').mockResolvedValue({ accepted: false });
     vi.spyOn(quickNoteService, 'createNote').mockResolvedValue(createNoteItem({ id: 'created' }));
     vi.spyOn(quickNoteService, 'dive').mockResolvedValue({
       id: 'run-1',
@@ -91,7 +96,9 @@ describe('quickNote actions', () => {
       status: 'running',
     } as Awaited<ReturnType<typeof quickNoteService.dive>>);
     vi.spyOn(quickNoteService, 'removeNote').mockResolvedValue();
-    vi.spyOn(quickNoteService, 'updateNoteContent').mockResolvedValue();
+    vi.spyOn(quickNoteService, 'updateNoteContent').mockImplementation(async () => ({
+      analyzeDueAt: Date.now() + ANALYZE_SETTLE_DELAY,
+    }));
   });
 
   afterEach(() => {
@@ -161,24 +168,120 @@ describe('quickNote actions', () => {
     });
   });
 
+  /** @example A saved Quick Note requests Analyze after six seconds without further edits. */
+  it('claims Analyze after the configured quiet period', async () => {
+    resetStore({ notes: [createNoteItem({ id: 'a' })], notesInit: true });
+
+    useQuickNoteStore.getState().updateNoteContent('a', 'hello');
+    await vi.advanceTimersByTimeAsync(PERSIST_DEBOUNCE);
+    await vi.advanceTimersByTimeAsync(ANALYZE_SETTLE_DELAY - 1);
+
+    /** @example The Agent is not claimed before the complete quiet period elapses. */
+    expect(quickNoteService.analyze).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    /** @example The latest saved Quick Note is claimed when the quiet period elapses. */
+    expect(quickNoteService.analyze).toHaveBeenCalledWith('a', 'automatic');
+  });
+
+  /** @example Completed background Analyze appears in the open note without a reload. */
+  it('polls an accepted Analyze claim until its Annotation is projected', async () => {
+    resetStore({ notes: [createNoteItem({ id: 'a' })], notesInit: true });
+    vi.spyOn(quickNoteService, 'analyze').mockResolvedValue({
+      accepted: true,
+      run: {
+        id: 'run-1',
+        kind: 'analyze',
+        quickNoteId: 'a',
+        sourceHistoryId: 'history-1',
+        status: 'pending',
+      },
+    } as Awaited<ReturnType<typeof quickNoteService.analyze>>);
+    const completed = createNoteItem({
+      annotation: { content: '轻量理解', divedAt: 2000 },
+      content: 'hello',
+      id: 'a',
+      run: { kind: 'analyze', operationId: 'op-1', status: 'completed' },
+    });
+    vi.spyOn(quickNoteService, 'getNotes').mockResolvedValue([completed]);
+
+    useQuickNoteStore.getState().updateNoteContent('a', 'hello');
+    await vi.advanceTimersByTimeAsync(PERSIST_DEBOUNCE + ANALYZE_SETTLE_DELAY);
+    await vi.advanceTimersByTimeAsync(ANALYZE_POLL_INTERVAL);
+
+    /** @example The accepted Annotation replaces the pre-Run local projection. */
+    expect(useQuickNoteStore.getState().notes[0].annotation?.content).toBe('轻量理解');
+  });
+
+  /** @example Clicking Analyze saves the visible revision before requesting a manual Run. */
+  it('flushes the latest editor revision before manual Analyze', async () => {
+    resetStore({ notes: [createNoteItem({ content: '旧内容', id: 'a' })], notesInit: true });
+    vi.spyOn(quickNoteService, 'analyze').mockResolvedValue({
+      accepted: true,
+      run: {
+        id: 'run-1',
+        kind: 'analyze',
+        quickNoteId: 'a',
+        sourceHistoryId: 'history-1',
+        status: 'pending',
+      },
+    } as Awaited<ReturnType<typeof quickNoteService.analyze>>);
+
+    useQuickNoteStore.getState().updateNoteContent('a', '最新内容', { revision: 2 });
+    await useQuickNoteStore.getState().analyzeNote('a');
+
+    /** @example The manual action uses the explicit trigger and pins no stale editor content. */
+    expect(quickNoteService.analyze).toHaveBeenCalledWith('a', 'manual');
+    expect(vi.mocked(quickNoteService.updateNoteContent).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(quickNoteService.analyze).mock.invocationCallOrder[0],
+    );
+    expect(useQuickNoteStore.getState().notes[0].run?.status).toBe('pending');
+  });
+
+  /** @example Continuing to type cancels the countdown for the previously saved revision. */
+  it('restarts Automatic Analysis countdown after a newer edit', async () => {
+    resetStore({ notes: [createNoteItem({ id: 'a' })], notesInit: true });
+
+    useQuickNoteStore.getState().updateNoteContent('a', 'first');
+    await vi.advanceTimersByTimeAsync(PERSIST_DEBOUNCE);
+    await vi.advanceTimersByTimeAsync(ANALYZE_SETTLE_DELAY - 500);
+    useQuickNoteStore.getState().updateNoteContent('a', 'second');
+    await vi.advanceTimersByTimeAsync(500);
+
+    // ROOT CAUSE:
+    //
+    // The previous countdown used to remain live until the newer revision finished saving.
+    // It could therefore claim the old Document revision while the user was still typing.
+    //
+    // We now cancel the scheduled claim as soon as a new editor change arrives.
+    expect(quickNoteService.analyze).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(PERSIST_DEBOUNCE + ANALYZE_SETTLE_DELAY);
+
+    /** @example Only the quiet period belonging to the second saved revision can trigger. */
+    expect(quickNoteService.analyze).toHaveBeenCalledTimes(1);
+    expect(quickNoteService.analyze).toHaveBeenCalledWith('a', 'automatic');
+  });
+
   /** @example A second edit arriving during the first request remains queued for persistence. */
   it('does not drop edits made while an earlier save is in flight', async () => {
-    let resolveFirstSave: (() => void) | undefined;
+    let resolveFirstSave: ((value: { analyzeDueAt?: number }) => void) | undefined;
     const updateNoteContent = vi
       .spyOn(quickNoteService, 'updateNoteContent')
       .mockImplementationOnce(
         () =>
-          new Promise<void>((resolve) => {
+          new Promise<{ analyzeDueAt?: number }>((resolve) => {
             resolveFirstSave = resolve;
           }),
       )
-      .mockResolvedValue();
+      .mockResolvedValue({});
     resetStore({ notes: [createNoteItem({ id: 'a' })], notesInit: true });
 
     useQuickNoteStore.getState().updateNoteContent('a', 'first', { revision: 1 });
     await vi.advanceTimersByTimeAsync(PERSIST_DEBOUNCE);
     useQuickNoteStore.getState().updateNoteContent('a', 'second', { revision: 2 });
-    resolveFirstSave?.();
+    resolveFirstSave?.({});
     await Promise.resolve();
 
     /** @example Completing the stale request does not report the newer edit as saved. */
@@ -206,7 +309,7 @@ describe('quickNote actions', () => {
     const updateNoteContent = vi
       .spyOn(quickNoteService, 'updateNoteContent')
       .mockRejectedValueOnce(new Error('offline'))
-      .mockResolvedValue();
+      .mockResolvedValue({});
     resetStore({ notes: [createNoteItem({ id: 'a', tags: ['manual'] })], notesInit: true });
 
     useQuickNoteStore.getState().updateNoteContent('a', 'hello');
@@ -240,6 +343,85 @@ describe('quickNote actions', () => {
     expect(quickNoteSelectors.isDiving('a')(state)).toBe(false);
     expect(state.notes[0].annotation?.divedAt).toBeTruthy();
     expect(state.notes[0].annotation?.content).toBe('解释');
+  });
+
+  /** @example A terminal status visible before its completion projection triggers a bounded retry. */
+  it('reconciles a terminal Dive whose Annotation becomes visible on the next poll', async () => {
+    resetStore({ notes: [createNoteItem({ content: '记一下', id: 'a' })], notesInit: true });
+    const terminalWithoutProjection = createNoteItem({
+      content: '记一下',
+      id: 'a',
+      run: { kind: 'dive', operationId: 'op-1', status: 'completed' },
+    });
+    const terminalWithProjection = createNoteItem({
+      ...terminalWithoutProjection,
+      annotation: { content: '最终解释', divedAt: 3000 },
+    });
+    const getNotes = vi
+      .spyOn(quickNoteService, 'getNotes')
+      .mockResolvedValueOnce([terminalWithoutProjection])
+      .mockResolvedValueOnce([terminalWithProjection]);
+
+    await useQuickNoteStore.getState().diveInto('a');
+    await vi.advanceTimersByTimeAsync(DIVE_POLL_INTERVAL);
+
+    // ROOT CAUSE:
+    //
+    // A completion-status read can win the race against the asynchronous completion projection.
+    // The old behavior stopped polling immediately and left the Annotation panel stale until reload.
+    //
+    // We keep the Dive pending for a bounded reconciliation read when its projection is absent.
+    expect(quickNoteSelectors.isDiving('a')(useQuickNoteStore.getState())).toBe(true);
+    expect(useQuickNoteStore.getState().notes[0].annotation).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(DIVE_POLL_INTERVAL);
+
+    /** @example The second read accepts the completed projection without a page reload. */
+    expect(getNotes).toHaveBeenCalledTimes(2);
+    expect(quickNoteSelectors.isDiving('a')(useQuickNoteStore.getState())).toBe(false);
+    expect(useQuickNoteStore.getState().notes[0].annotation?.content).toBe('最终解释');
+  });
+
+  /** @example A repeated Dive waits for a newer Annotation instead of accepting the previous one. */
+  it('reconciles a repeated Dive while its previous Annotation is still visible', async () => {
+    const previousAnnotation = { content: '上一次解释', divedAt: 2000 };
+    resetStore({
+      notes: [createNoteItem({ annotation: previousAnnotation, content: '再分析一次', id: 'a' })],
+      notesInit: true,
+    });
+    const terminalWithPreviousProjection = createNoteItem({
+      annotation: previousAnnotation,
+      content: '再分析一次',
+      id: 'a',
+      run: { kind: 'dive', operationId: 'op-2', status: 'completed' },
+    });
+    const terminalWithCurrentProjection = createNoteItem({
+      ...terminalWithPreviousProjection,
+      annotation: { content: '本次解释', divedAt: 3000 },
+    });
+    const getNotes = vi
+      .spyOn(quickNoteService, 'getNotes')
+      .mockResolvedValueOnce([terminalWithPreviousProjection])
+      .mockResolvedValueOnce([terminalWithCurrentProjection]);
+
+    await useQuickNoteStore.getState().diveInto('a');
+    await vi.advanceTimersByTimeAsync(DIVE_POLL_INTERVAL);
+
+    // ROOT CAUSE:
+    //
+    // Presence-only reconciliation mistakes the previous Dive's Annotation for the current result.
+    // That can stop polling before the completion hook projects the new Annotation.
+    //
+    // We pin the pre-Dive Annotation timestamp and wait until the projection advances.
+    expect(quickNoteSelectors.isDiving('a')(useQuickNoteStore.getState())).toBe(true);
+    expect(useQuickNoteStore.getState().notes[0].annotation?.content).toBe('上一次解释');
+
+    await vi.advanceTimersByTimeAsync(DIVE_POLL_INTERVAL);
+
+    /** @example A newer projection completes the repeated Dive without requiring a page reload. */
+    expect(getNotes).toHaveBeenCalledTimes(2);
+    expect(quickNoteSelectors.isDiving('a')(useQuickNoteStore.getState())).toBe(false);
+    expect(useQuickNoteStore.getState().notes[0].annotation?.content).toBe('本次解释');
   });
 
   /** @example Dive flushes a pending rich-text revision before the server claims its snapshot. */

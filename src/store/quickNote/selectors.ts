@@ -56,11 +56,28 @@ const isDiving =
   (s: QuickNoteState): boolean =>
     s.divingNoteIds.includes(id);
 
+const agenticDetailsById = (id: string) => (s: QuickNoteState) => s.agenticDetailMap[id];
+
+const isCreatingComment = (id: string) => (s: QuickNoteState) =>
+  s.creatingCommentNoteIds.includes(id);
+
+const isAnalyzing = (id: string) => (s: QuickNoteState) => s.analyzingNoteIds.includes(id);
+
+const isEditingComment = (id: string) => (s: QuickNoteState) => s.editingCommentIds.includes(id);
+
+const isProcessingProposal = (id: string) => (s: QuickNoteState) =>
+  s.processingProposalIds.includes(id);
+
 export const quickNoteSelectors = {
   activeNote,
+  agenticDetailsById,
   collections,
   filteredNotes,
+  isAnalyzing,
+  isCreatingComment,
   isDiving,
+  isEditingComment,
+  isProcessingProposal,
   noteById,
   tags,
   totalCount,

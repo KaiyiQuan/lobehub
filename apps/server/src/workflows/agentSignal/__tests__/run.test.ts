@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { createSource } from '@lobechat/agent-signal';
 import type { AgentSignalSourceEvent, SourceAgentUserMessage } from '@lobechat/agent-signal/source';
 import { AGENT_SIGNAL_SOURCE_TYPES, createSourceEvent } from '@lobechat/agent-signal/source';
 import type { ISnapshotStore } from '@lobechat/agent-tracing';
@@ -6,6 +7,7 @@ import { agents, messages, threads, topics, users } from '@lobechat/database/sch
 import { getTestDB } from '@lobechat/database/test-utils';
 import { describe, expect, it, vi } from 'vitest';
 
+import { projectAgentSignalObservability } from '@/server/services/agentSignal/observability/projector';
 import { createProcedurePolicyOptions as createProcedurePolicyOptionsFixture } from '@/server/services/agentSignal/procedure';
 import type { SelfReflectionReviewContext } from '@/server/services/agentSignal/services/selfIteration/reflection/handler';
 import type { NightlyReviewContext } from '@/server/services/agentSignal/services/selfIteration/review/collect';
@@ -81,6 +83,112 @@ const createNightlyReviewContext = (input: {
 });
 
 describe('runAgentSignalWorkflow', () => {
+  /** @example A Quick Note Signal snapshot points to the Agent operation it dispatched. */
+  it('records terminal operation linkage in workflow snapshots', async () => {
+    const db = await getTestDB();
+    const userId = `eval_${uuid()}`;
+    const quickNoteId = 'qn_trace_1';
+    const runId = '11111111-1111-1111-1111-111111111111';
+    const sourceHistoryId = 'history-trace-1';
+    const operationId = 'op_trace_1';
+    const scopeKey = `quick-note:${quickNoteId}`;
+    const timestamp = new Date('2026-08-26T12:00:00.000Z').getTime();
+    const saveSnapshot = vi.fn().mockResolvedValue(undefined);
+    const snapshotStore = {
+      get: vi.fn(),
+      getLatest: vi.fn(),
+      list: vi.fn(),
+      listPartials: vi.fn(),
+      loadPartial: vi.fn(),
+      removePartial: vi.fn(),
+      save: saveSnapshot,
+      savePartial: vi.fn(),
+    } satisfies ISnapshotStore;
+    const sourceEvent = createSourceEvent({
+      payload: { quickNoteId, runId, sourceHistoryId, trigger: 'manual', userId },
+      scopeKey,
+      sourceId: runId,
+      sourceType: AGENT_SIGNAL_SOURCE_TYPES.quickNoteAnalyzeRequested,
+      timestamp,
+    });
+    const source = createSource({
+      payload: sourceEvent.payload,
+      scope: { userId },
+      scopeKey,
+      sourceId: runId,
+      sourceType: sourceEvent.sourceType,
+      timestamp,
+    });
+    const observability = projectAgentSignalObservability({
+      actions: [],
+      results: [],
+      signals: [],
+      source,
+    });
+    const executeSourceEvent: NonNullable<RunAgentSignalWorkflowDeps['executeSourceEvent']> = vi.fn(
+      async () => ({
+        deduped: false,
+        orchestration: {
+          actions: [],
+          emittedSignals: [],
+          observability,
+          plans: [],
+          results: [],
+          runtimeResult: {
+            concluded: {
+              operationId,
+              quickNoteId,
+              runId,
+              sourceHistoryId,
+              status: 'dispatched',
+            },
+            status: 'conclude',
+          },
+        },
+        source,
+        trigger: { scopeKey, token: 'trace-token', windowEventCount: 1 },
+      }),
+    );
+
+    await db.insert(users).values({ id: userId });
+
+    await runAgentSignalWorkflow(createWorkflowContext({ sourceEvent, userId }), {
+      createSnapshotStore: () => snapshotStore,
+      executeSourceEvent,
+      getDb: async () => db,
+    });
+
+    // ROOT CAUSE:
+    //
+    // A terminal source handler returned the dispatched operation in `concluded`, but the workflow
+    // snapshot previously projected only source/signal/action/result nodes. The Signal trace could
+    // prove ingestion but could not identify the Agent execution it started.
+    //
+    // We fixed this by projecting terminal runtime results into an `agent_signal.terminal` event.
+    /** @example The saved Signal snapshot exposes every immutable Quick Note execution reference. */
+    expect(saveSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        steps: [
+          expect.objectContaining({
+            events: expect.arrayContaining([
+              expect.objectContaining({
+                data: expect.objectContaining({
+                  operationId,
+                  quickNoteId,
+                  runId,
+                  runtimeStatus: 'conclude',
+                  sourceHistoryId,
+                  status: 'dispatched',
+                }),
+                type: 'agent_signal.terminal',
+              }),
+            ]),
+          }),
+        ],
+      }),
+    );
+  });
+
   it('hydrates client.runtime.start into agent.user.message with serialized root-topic context', async () => {
     const db = await getTestDB();
     const userId = `eval_${uuid()}`;
@@ -88,8 +196,7 @@ describe('runAgentSignalWorkflow', () => {
     const parentMessageId = `msg_${uuid()}`;
     const baseTimestamp = new Date('2026-01-01T00:00:00.000Z').getTime();
     let capturedSourceEvent:
-      | AgentSignalSourceEvent<typeof AGENT_SIGNAL_SOURCE_TYPES.agentUserMessage>
-      | undefined;
+      AgentSignalSourceEvent<typeof AGENT_SIGNAL_SOURCE_TYPES.agentUserMessage> | undefined;
 
     await db.insert(users).values({ id: userId });
 
@@ -390,8 +497,7 @@ describe('runAgentSignalWorkflow', () => {
     const assistantMessageId = `msg_${uuid()}`;
     const baseTimestamp = new Date('2026-01-03T00:00:00.000Z').getTime();
     let capturedSourceEvent:
-      | AgentSignalSourceEvent<typeof AGENT_SIGNAL_SOURCE_TYPES.agentUserMessage>
-      | undefined;
+      AgentSignalSourceEvent<typeof AGENT_SIGNAL_SOURCE_TYPES.agentUserMessage> | undefined;
 
     await db.insert(users).values({ id: userId });
 

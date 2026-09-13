@@ -6,13 +6,13 @@ import { getServerDB } from '@/database/server';
 import { enqueueAgentSignalSourceEvent } from '@/server/services/agentSignal';
 
 /**
- * Claims due Automatic Discovery Runs for clients that are no longer online.
+ * Claims due Automatic Analyze Runs for clients that are no longer online.
  *
  * Call stack:
  *
  * QStash one-minute schedule
- *   -> {@link sweepQuickNoteDiscovery}
- *     -> {@link QuickNoteModel.findDueDiscoveryCandidates}
+ *   -> {@link sweepQuickNoteAnalyze}
+ *     -> {@link QuickNoteModel.findDueAnalyzeCandidates}
  *       -> {@link QuickNoteModel.claimRun}
  *         -> Agent Signal Workflow
  *
@@ -20,21 +20,21 @@ import { enqueueAgentSignalSourceEvent } from '@/server/services/agentSignal';
  * - The deployment invokes the signed sweep route once per minute.
  *
  * Expects:
- * - Candidate selection already filters the default-off user setting.
+ * - Candidate selection already filters the user's effective Auto Analyze setting.
  * - Agent Signal scope and Run constraints deduplicate client/sweep races.
  *
  * Returns:
  * - Claimed and enqueued Run counts for cron observability.
  */
-export const sweepQuickNoteDiscovery = async (context: Context) => {
+export const sweepQuickNoteAnalyze = async (context: Context) => {
   try {
     const db = await getServerDB();
-    const candidates = await QuickNoteModel.findDueDiscoveryCandidates(db);
+    const candidates = await QuickNoteModel.findDueAnalyzeCandidates(db);
     let enqueued = 0;
 
     for (const candidate of candidates) {
       const model = new QuickNoteModel(db, candidate.userId, candidate.workspaceId ?? undefined);
-      const run = await model.claimRun(candidate.id, { kind: 'discovery' });
+      const run = await model.claimRun(candidate.id, { kind: 'analyze', trigger: 'automatic' });
       if (!run) continue;
 
       const result = await enqueueAgentSignalSourceEvent(
@@ -43,11 +43,12 @@ export const sweepQuickNoteDiscovery = async (context: Context) => {
             quickNoteId: run.quickNoteId,
             runId: run.id,
             sourceHistoryId: run.sourceHistoryId,
+            trigger: 'automatic',
             userId: candidate.userId,
           },
           scopeKey: `quick-note:${run.quickNoteId}`,
           sourceId: run.id,
-          sourceType: AGENT_SIGNAL_SOURCE_TYPES.quickNoteDiscoveryRequested,
+          sourceType: AGENT_SIGNAL_SOURCE_TYPES.quickNoteAnalyzeRequested,
         },
         {
           userId: candidate.userId,

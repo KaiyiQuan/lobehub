@@ -1,10 +1,26 @@
+import type { QuickNoteAnalyzeTrigger } from '@lobechat/types';
+
 import { lambdaClient } from '@/libs/trpc/client';
 
-import type { QuickNoteItem } from './type';
+import type {
+  QuickNoteAgenticDetails,
+  QuickNoteComment,
+  QuickNoteItem,
+  QuickNoteProposal,
+  QuickNoteResource,
+} from './type';
 
-export type { QuickNoteAnnotation, QuickNoteItem } from './type';
+export type {
+  QuickNoteAgenticDetails,
+  QuickNoteAnnotation,
+  QuickNoteComment,
+  QuickNoteItem,
+  QuickNoteProposal,
+  QuickNoteResource,
+} from './type';
 
 interface ServerQuickNoteItem {
+  analyzeDueAt?: Date | string | null;
   annotation?: { content: string; divedAt: Date | string };
   collection?: string | null;
   content?: string | null;
@@ -17,6 +33,22 @@ interface ServerQuickNoteItem {
   tags: string[];
   topicId: string;
   updatedAt: Date | string;
+}
+
+interface ServerQuickNoteAgenticDetails {
+  comments: Array<
+    Omit<QuickNoteComment, 'createdAt' | 'updatedAt'> & {
+      createdAt: Date | string;
+      updatedAt: Date | string;
+    }
+  >;
+  proposals: Array<
+    Omit<QuickNoteProposal, 'createdAt' | 'updatedAt'> & {
+      createdAt: Date | string;
+      updatedAt: Date | string;
+    }
+  >;
+  resources: Array<Omit<QuickNoteResource, 'createdAt'> & { createdAt: Date | string }>;
 }
 
 /**
@@ -35,6 +67,7 @@ const normalizeQuickNote = (note: ServerQuickNoteItem): QuickNoteItem => ({
   collection: note.collection ?? undefined,
   content: note.content ?? '',
   createdAt: new Date(note.createdAt).getTime(),
+  analyzeDueAt: note.analyzeDueAt ? new Date(note.analyzeDueAt).getTime() : undefined,
   documentId: note.documentId,
   editorData: note.editorData ?? undefined,
   id: note.id,
@@ -46,10 +79,38 @@ const normalizeQuickNote = (note: ServerQuickNoteItem): QuickNoteItem => ({
 });
 
 /**
+ * Normalizes Agent sidecar dates for the browser store.
+ *
+ * Before:
+ * - `{ comments: [{ createdAt: "2026-09-03T00:00:00Z" }] }`
+ *
+ * After:
+ * - `{ comments: [{ createdAt: 1788393600000 }] }`
+ */
+const normalizeAgenticDetails = (
+  details: ServerQuickNoteAgenticDetails,
+): QuickNoteAgenticDetails => ({
+  comments: details.comments.map((comment) => ({
+    ...comment,
+    createdAt: new Date(comment.createdAt).getTime(),
+    updatedAt: new Date(comment.updatedAt).getTime(),
+  })),
+  proposals: details.proposals.map((proposal) => ({
+    ...proposal,
+    createdAt: new Date(proposal.createdAt).getTime(),
+    updatedAt: new Date(proposal.updatedAt).getTime(),
+  })),
+  resources: details.resources.map((resource) => ({
+    ...resource,
+    createdAt: new Date(resource.createdAt).getTime(),
+  })),
+});
+
+/**
  * Client boundary for server-backed Quick Note persistence and Agent Runs.
  *
  * Use when:
- * - The Quick Note Zustand store needs CRUD, Discovery, or Dive operations.
+ * - The Quick Note Zustand store needs CRUD, Analyze, or Dive operations.
  *
  * Expects:
  * - UI components continue consuming the existing `QuickNoteItem` projection.
@@ -58,6 +119,12 @@ const normalizeQuickNote = (note: ServerQuickNoteItem): QuickNoteItem => ({
  * - Normalized client records and server-owned Run identities.
  */
 class QuickNoteService {
+  acceptProposal = async (proposalId: string) =>
+    lambdaClient.quickNote.acceptProposal.mutate({ proposalId });
+
+  createComment = async (quickNoteId: string, content: string) =>
+    lambdaClient.quickNote.createComment.mutate({ content, quickNoteId });
+
   getNotes = async (): Promise<QuickNoteItem[]> => {
     const notes = await lambdaClient.quickNote.list.query();
     return notes.map((note) => normalizeQuickNote(note as ServerQuickNoteItem));
@@ -68,6 +135,11 @@ class QuickNoteService {
     return normalizeQuickNote({ ...note, content: '', editorData: undefined });
   };
 
+  getAgenticDetails = async (id: string): Promise<QuickNoteAgenticDetails> => {
+    const details = await lambdaClient.quickNote.agenticDetails.query({ id });
+    return normalizeAgenticDetails(details as ServerQuickNoteAgenticDetails);
+  };
+
   removeNote = async (id: string): Promise<void> => {
     await lambdaClient.quickNote.delete.mutate({ id });
   };
@@ -76,11 +148,28 @@ class QuickNoteService {
     id: string,
     content: string,
     editorData: Record<string, unknown>,
-  ): Promise<void> => {
-    await lambdaClient.quickNote.updateContent.mutate({ content, editorData, id });
+  ): Promise<{ analyzeDueAt?: number }> => {
+    const note = await lambdaClient.quickNote.updateContent.mutate({ content, editorData, id });
+    return {
+      analyzeDueAt: note.analyzeDueAt ? new Date(note.analyzeDueAt).getTime() : undefined,
+    };
   };
 
-  claimDiscovery = async (id: string) => lambdaClient.quickNote.claimDiscovery.mutate({ id });
+  analyze = async (id: string, trigger: QuickNoteAnalyzeTrigger = 'manual') =>
+    lambdaClient.quickNote.analyze.mutate({ id, trigger });
+
+  dismissProposal = async (proposalId: string) =>
+    lambdaClient.quickNote.decideProposal.mutate({ decisionStatus: 'dismissed', proposalId });
+
+  updateComment = async (commentId: string, content: string) =>
+    lambdaClient.quickNote.updateComment.mutate({ commentId, content });
+
+  updateProposal = async (proposalId: string, content: string) =>
+    lambdaClient.quickNote.updateProposal.mutate({
+      content,
+      editorData: { markdown: content },
+      proposalId,
+    });
 
   dive = async (id: string) => lambdaClient.quickNote.dive.mutate({ id });
 }

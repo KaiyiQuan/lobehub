@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseQuickNoteDiscoveryOutput, renderQuickNoteSourceText } from '.';
+import { parseQuickNoteAnalyzeOutput, renderQuickNoteSourceText } from '.';
 
 /** @example Quick Note agent boundaries normalize rich-text input and structured output. */
 describe('QuickNoteProcessingService helpers', () => {
@@ -20,16 +20,21 @@ describe('QuickNoteProcessingService helpers', () => {
     expect(renderQuickNoteSourceText({ markdown: 'Remember this' })).toBe('Remember this');
   });
 
-  /** @example Discovery accepts a fenced JSON result produced by a chat model. */
-  it('parses and bounds Discovery output', () => {
-    const parsed = parseQuickNoteDiscoveryOutput(
-      '```json\n{"annotation":"Useful","tags":["one","two","three","four","five","six"],"relatedDocumentIds":["docs_1"]}\n```',
+  /** @example Analyze accepts a fenced JSON result produced by a chat model. */
+  it('parses and bounds Analyze output', () => {
+    const parsed = parseQuickNoteAnalyzeOutput(
+      '```json\n{"annotation":"Useful","tags":["one","two","three","four","five","six"],"contextQueries":[" voice ","audio%","voice","_"],"relatedResources":[{"type":"topic","id":"tpc_1","selector":{"quote":"duplex"}},{"type":"topic","id":"tpc_1"},{"type":"document","id":"docs_1","selector":"invalid"},{"type":"invalid","id":"bad"}],"proposals":[{"kind":"task","content":"Review the experiment"},{"kind":"page","content":"Invalid kind"}]}\n```',
     );
 
     /** @example Only the five lightweight tags allowed by the agent contract survive. */
     expect(parsed).toEqual({
       annotation: 'Useful',
-      relatedDocumentIds: ['docs_1'],
+      contextQueries: ['voice', 'audio'],
+      proposals: [{ content: 'Review the experiment', kind: 'task' }],
+      relatedResources: [
+        { id: 'tpc_1', selector: { quote: 'duplex' }, type: 'topic' },
+        { id: 'docs_1', type: 'document' },
+      ],
       tags: ['one', 'two', 'three', 'four', 'five'],
     });
   });

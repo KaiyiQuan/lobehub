@@ -19,7 +19,16 @@ import { documentLikes } from './documentLike';
 import { documents, files, knowledgeBases } from './file';
 import { generationBatches, generations, generationTopics } from './generation';
 import { messageGroups, messages, messagesFiles, messageTranslates } from './message';
-import { quickNoteResources, quickNoteRunResources, quickNoteRuns, quickNotes } from './quickNote';
+import {
+  quickNoteCommentRevisions,
+  quickNoteComments,
+  quickNoteProposals,
+  quickNoteResources,
+  quickNoteRunInputs,
+  quickNoteRunResources,
+  quickNoteRuns,
+  quickNotes,
+} from './quickNote';
 import { chunks, documentChunks, unstructuredChunks } from './rag';
 import { sessionGroups, sessions } from './session';
 import { threads, topicDocuments, topics } from './topic';
@@ -355,10 +364,12 @@ export const documentHistoriesRelations = relations(documentHistories, ({ one })
 }));
 
 export const quickNotesRelations = relations(quickNotes, ({ many, one }) => ({
+  comments: many(quickNoteComments),
   document: one(documents, {
     fields: [quickNotes.documentId],
     references: [documents.id],
   }),
+  proposals: many(quickNoteProposals),
   resources: many(quickNoteResources),
   runs: many(quickNoteRuns),
   topic: one(topics, {
@@ -368,6 +379,8 @@ export const quickNotesRelations = relations(quickNotes, ({ many, one }) => ({
 }));
 
 export const quickNoteRunsRelations = relations(quickNoteRuns, ({ many, one }) => ({
+  inputs: many(quickNoteRunInputs),
+  proposals: many(quickNoteProposals),
   quickNote: one(quickNotes, {
     fields: [quickNoteRuns.quickNoteId],
     references: [quickNotes.id],
@@ -380,6 +393,67 @@ export const quickNoteRunsRelations = relations(quickNoteRuns, ({ many, one }) =
   thread: one(threads, {
     fields: [quickNoteRuns.threadId],
     references: [threads.id],
+  }),
+}));
+
+export const quickNoteProposalsRelations = relations(quickNoteProposals, ({ one }) => ({
+  acceptedHistory: one(documentHistories, {
+    fields: [quickNoteProposals.acceptedHistoryId],
+    references: [documentHistories.id],
+  }),
+  currentHistory: one(documentHistories, {
+    fields: [quickNoteProposals.currentHistoryId],
+    references: [documentHistories.id],
+  }),
+  document: one(documents, {
+    fields: [quickNoteProposals.documentId],
+    references: [documents.id],
+  }),
+  quickNote: one(quickNotes, {
+    fields: [quickNoteProposals.quickNoteId],
+    references: [quickNotes.id],
+  }),
+  run: one(quickNoteRuns, {
+    fields: [quickNoteProposals.runId],
+    references: [quickNoteRuns.id],
+  }),
+  sourceHistory: one(documentHistories, {
+    fields: [quickNoteProposals.sourceHistoryId],
+    references: [documentHistories.id],
+  }),
+}));
+
+export const quickNoteCommentsRelations = relations(quickNoteComments, ({ many, one }) => ({
+  quickNote: one(quickNotes, {
+    fields: [quickNoteComments.quickNoteId],
+    references: [quickNotes.id],
+  }),
+  revisions: many(quickNoteCommentRevisions),
+}));
+
+export const quickNoteCommentRevisionsRelations = relations(
+  quickNoteCommentRevisions,
+  ({ many, one }) => ({
+    comment: one(quickNoteComments, {
+      fields: [quickNoteCommentRevisions.commentId],
+      references: [quickNoteComments.id],
+    }),
+    runInputs: many(quickNoteRunInputs),
+  }),
+);
+
+export const quickNoteRunInputsRelations = relations(quickNoteRunInputs, ({ one }) => ({
+  commentRevision: one(quickNoteCommentRevisions, {
+    fields: [quickNoteRunInputs.commentRevisionId],
+    references: [quickNoteCommentRevisions.id],
+  }),
+  documentHistory: one(documentHistories, {
+    fields: [quickNoteRunInputs.documentHistoryId],
+    references: [documentHistories.id],
+  }),
+  run: one(quickNoteRuns, {
+    fields: [quickNoteRunInputs.runId],
+    references: [quickNoteRuns.id],
   }),
 }));
 

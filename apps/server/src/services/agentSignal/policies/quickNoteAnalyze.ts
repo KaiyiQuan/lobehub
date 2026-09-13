@@ -1,10 +1,10 @@
-import type { SourceQuickNoteDiscoveryRequested } from '@lobechat/agent-signal/source';
+import type { SourceQuickNoteAnalyzeRequested } from '@lobechat/agent-signal/source';
 import { AGENT_SIGNAL_SOURCE_TYPES } from '@lobechat/agent-signal/source';
 
 import { defineAgentSignalHandlers, defineSourceHandler } from '../runtime/middleware';
 
-/** Dependencies for the Quick Note Discovery source handler. */
-export interface QuickNoteDiscoverySourceHandlerOptions {
+/** Dependencies for the Quick Note Analyze source handler. */
+export interface QuickNoteAnalyzeSourceHandlerOptions {
   /** Starts the already-claimed Run and returns its Agent Operation identity. */
   dispatch: (runId: string) => Promise<{ operationId?: string | null } | undefined>;
 }
@@ -22,13 +22,13 @@ export interface QuickNoteDiscoverySourceHandlerOptions {
  * Returns:
  * - A handler that dispatches the immutable Run without adding side effects to planning.
  */
-export const createQuickNoteDiscoverySourceHandler = (
-  options: QuickNoteDiscoverySourceHandlerOptions,
+export const createQuickNoteAnalyzeSourceHandler = (
+  options: QuickNoteAnalyzeSourceHandlerOptions,
 ) => ({
-  handle: async (source: SourceQuickNoteDiscoveryRequested) => {
+  handle: async (source: SourceQuickNoteAnalyzeRequested) => {
     const payload = source.payload;
     if (
-      source.sourceType !== AGENT_SIGNAL_SOURCE_TYPES.quickNoteDiscoveryRequested ||
+      source.sourceType !== AGENT_SIGNAL_SOURCE_TYPES.quickNoteAnalyzeRequested ||
       !payload.runId ||
       !payload.quickNoteId ||
       !payload.sourceHistoryId ||
@@ -42,24 +42,33 @@ export const createQuickNoteDiscoverySourceHandler = (
       ? {
           concluded: {
             operationId: result.operationId,
+            quickNoteId: payload.quickNoteId,
             runId: payload.runId,
+            sourceHistoryId: payload.sourceHistoryId,
             status: 'dispatched',
+            trigger: payload.trigger,
           },
           status: 'conclude' as const,
         }
       : {
-          concluded: { reason: 'run_unavailable', runId: payload.runId },
+          concluded: {
+            quickNoteId: payload.quickNoteId,
+            reason: 'run_unavailable',
+            runId: payload.runId,
+            sourceHistoryId: payload.sourceHistoryId,
+            trigger: payload.trigger,
+          },
           status: 'conclude' as const,
         };
   },
-  id: 'quick-note-discovery-source',
+  id: 'quick-note-analyze-source',
 });
 
 /**
- * Registers Quick Note Discovery as a default Agent Signal source policy.
+ * Registers Quick Note Analyze as a default Agent Signal source policy.
  *
  * Use when:
- * - A runtime should consume `quick_note.discovery.requested` events.
+ * - A runtime should consume `quick_note.analyze.requested` events.
  *
  * Expects:
  * - Dispatch dependencies are owner/workspace scoped.
@@ -67,12 +76,12 @@ export const createQuickNoteDiscoverySourceHandler = (
  * Returns:
  * - One installable Agent Signal middleware.
  */
-export const createQuickNoteDiscoveryPolicy = (options: QuickNoteDiscoverySourceHandlerOptions) => {
-  const handler = createQuickNoteDiscoverySourceHandler(options);
+export const createQuickNoteAnalyzePolicy = (options: QuickNoteAnalyzeSourceHandlerOptions) => {
+  const handler = createQuickNoteAnalyzeSourceHandler(options);
 
   return defineAgentSignalHandlers([
     defineSourceHandler(
-      AGENT_SIGNAL_SOURCE_TYPES.quickNoteDiscoveryRequested,
+      AGENT_SIGNAL_SOURCE_TYPES.quickNoteAnalyzeRequested,
       handler.id,
       handler.handle,
     ),

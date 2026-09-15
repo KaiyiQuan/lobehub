@@ -196,6 +196,140 @@ keep the old replica serving, so `/health` never went down from the client's
 perspective. Implication for callers: a 30–60 s HTTP timeout covers both
 steady-state latency and a cold first request.
 
+### In-region capacity test harness (`loadtest/`)
+
+The load test above ran from a far-away client and measured its network. To
+measure the service itself, load is generated from inside Railway, in the same
+region, against a **temporary copy** of the service (never the production
+`solver` service):
+
+| File                                          | Role                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `loadtest/build_mix.py`                       | Builds `loadtest/mix.json` from the TravelPlanner validation CSV: `representative` = all 180 gold specs (easy/medium/hard x 3/5/7 days, 1-3 cities, maxCandidates 3, one infeasible), `heavy` = the 8 slowest specs.                                                                                                                                                                                                                          |
+| `loadtest/loadgen.py` + `loadtest/Dockerfile` | aiohttp control server deployed as a temporary `loadgen` service. Runs closed-loop (fixed concurrency) or open-loop (Poisson at a target rps, latency from the scheduled send time) scenarios across several processes, concurrently if more than one is given. Reports throughput, p50/p95/p99, error kinds (`http_5xx`, `timeout`, `conn_reset`, ...), server `solveMs`, response statuses, a per-second timeline and the client's own CPU. |
+| `loadtest/run_plan.py`                        | Submits a run plan to the loadgen and saves the JSON result.                                                                                                                                                                                                                                                                                                                                                                                  |
+| `loadtest/railway_ctl.py`                     | Creates, configures, deploys, scales, reads metrics/logs for and deletes the temporary services through the backboard GraphQL API. Refuses to touch any service other than `solver-loadtest` and `loadgen`.                                                                                                                                                                                                                                   |
+
+Workflow (workspace token in `RAILWAY_API_TOKEN`, plus `RAILWAY_PROJECT_ID`
+and `RAILWAY_ENVIRONMENT_ID`):
+
+```bash
+cd apps/solver-service
+ctl() { python3 loadtest/railway_ctl.py --state /tmp/lt-state.json "$@"; }
+ctl create --name solver-loadtest --port 8000 --healthcheck /health
+ctl vars   --name solver-loadtest SOLVER_SERVICE_API_KEY=<new random key> SOLVER_WORKERS=4 \
+           SOLVER_TP_SPLITS=validation PORT=8000 HOST=::
+ctl deploy --name solver-loadtest --dir .
+ctl create --name loadgen --port 8080 --healthcheck /health
+ctl vars   --name loadgen LOADGEN_KEY=<random> TARGET_API_KEY=<same key as above> PORT=8080
+ctl deploy --name loadgen --dir loadtest
+LOADGEN_URL=https://<loadgen domain> LOADGEN_KEY=... python3 loadtest/run_plan.py \
+  --target http://solver-loadtest.railway.internal:8000 \
+  --scenario '{"name":"solve-c64","op":"solve","mode":"closed","concurrency":64,"durationS":40,"warmupS":5,"processes":2}' \
+  --out /tmp/solve-c64.json
+ctl metrics --name solver-loadtest --since <ISO start>   # CPU / memory per replica
+ctl delete --name loadgen; ctl delete --name solver-loadtest; ctl list   # only `solver` must remain
+```
+
+`HOST=::` makes uvicorn listen on IPv6 as well, which private networking may
+use. Changing variables or replicas takes effect on the next `ctl deploy`.
+
+### Capacity results (2026-09-15, in-region, us-west2)
+
+Temporary `solver-loadtest` service built from this directory, loaded by the
+temporary `loadgen` service over private networking
+(`solver-loadtest.railway.internal`). Both were deleted afterwards; production
+was not touched. Mix: all 180 validation gold specs, `maxCandidates` 3,
+default time limit. Closed loop, 40 s measured after a 5 s warmup. The client's
+own CPU stayed below 0.35 core per process in every step. Raw JSON lives in
+`.records/solver-service-capacity/` (scratch, not committed).
+
+**Instance**: each replica gets a cgroup limit of 24 vCPU / 24 GB (`nproc`
+reports the host's 48 cores; do not size workers from `nproc`). Railway bills
+actual usage, not the limit.
+
+**One replica, `SOLVER_WORKERS=4`, `SOLVER_TP_SPLITS=validation`**
+
+| op | concurrency | throughput | p50 | p95 | p99 | errors | server solveMs p50 / p95 | replica CPU |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| solve | 1 | 8.8 rps | 100 ms | 238 ms | 311 ms | 0 | 89 / 229 | 1.0 vCPU |
+| solve | 8 | 58.7 rps | 116 ms | 289 ms | 397 ms | 0 | 101 / 273 | 6.7 vCPU |
+| solve | 16 | 110.6 rps | 123 ms | 307 ms | 433 ms | 0 | 106 / 291 | 14.7 vCPU |
+| solve | 32 | 136.1 rps | 204 ms | 480 ms | 670 ms | 0 | 154 / 410 | ~19 vCPU |
+| solve | 64 | 140.6 rps | 320 ms | 1122 ms | 1451 ms | 0 | 209 / 584 | — |
+| solve | 128 | 144.9 rps | 808 ms | 1603 ms | 1934 ms | 0 | 281 / 667 | ~13–24 vCPU |
+| solve | 256 | 138.6 rps | 1707 ms | 2959 ms | 3228 ms | 0 | 319 / 731 | ~17 vCPU |
+| solve | 512 | 137.6 rps | 2311 ms | 6764 ms | 7234 ms | 0 | 303 / 702 | ~24 vCPU |
+| verify | 8 | 156 rps | 51 ms | 58 ms | 62 ms | 0 | — | <1 vCPU |
+| verify | 32 | 621 rps | 51 ms | 59 ms | 65 ms | 0 | — | ~1 vCPU |
+| verify | 64 | 1036 rps | 58 ms | 86 ms | 110 ms | 0 | — | ~2 vCPU |
+| verify | 128 | 1685 rps | — | 112 ms | — | 0 | — | ~3.5 vCPU |
+| verify | 256 | 1686 rps | 141 ms | 302 ms | 347 ms | 0 | — | ~3.5 vCPU |
+| verify | 512 | 1458 rps | 100 ms | 1219 ms | 1357 ms | 0 | — | ~3 vCPU |
+
+CPU figures are Railway 30 s samples, so treat them as approximate.
+
+- **solve**: the knee is at concurrency 16–32, about **110–135 rps with p95 ≤ 0.5 s**. Throughput then stays flat at ~140 rps while latency grows linearly with the queue: p95 1.1 s at c=64, 3 s at c=256, 6.8 s at c=512. No errors appeared up to c=512, so overload shows up as queueing rather than failures; callers need their own timeout (the lobe-solver client uses 60 s). Cost is about **0.13 vCPU-seconds per solve**, and at the plateau the replica is close to its 24 vCPU limit. Each uvicorn worker runs CP-SAT solves in parallel in its threadpool (CP-SAT releases the GIL), so 4 workers already use ~20 vCPU.
+- **verify**: about **1000 rps at p95 < 90 ms** (c=64) and **~1700 rps at p95 ≤ 0.3 s** (c=128–256). Throughput drops and p95 exceeds 1 s at c=512. Verify is pure Python, so its ceiling is the GIL of the 4 workers (~3.5 vCPU used), not the replica's CPU.
+- **Server-side `solveMs` grows under load** (p50 89 → ~300 ms): solves contend for CPU and the GIL inside the same worker.
+
+**Worker tuning: more workers breaks the service.** With `SOLVER_WORKERS=24`
+(= vCPU limit) the replica failed **94–99 % of solve requests from c=32 on**
+(`http_500`, `server_disconnected`, `conn_reset`). The logs show
+`RuntimeError: can't start new thread`. The container has `pids.max=1000`
+(cgroup), and every worker can grow an anyio threadpool of up to 40 threads
+under load, so 24 workers x 40 threads exceeds the thread ceiling. The
+traceback flood also hit Railway's 500 logs/s cap, and log lines were dropped.
+`SOLVER_WORKERS=32` was not run after that. Idle memory is 0.34 GB with 4
+workers and 1.67 GB with 24, about **65 MB per worker** (validation split
+only). Loading all three splits was not measured.
+
+**Recommendation**: keep `SOLVER_WORKERS=4`. Up to ~16 would stay under
+`pids.max` (16 x 41 threads plus the master), but that was not measured.
+Scale solve throughput with replicas, not workers. If more per-worker
+parallelism is ever needed, cap the threadpool explicitly (anyio
+`total_tokens`) instead of raising the worker count.
+
+**Two replicas, `SOLVER_WORKERS=4`** (same private hostname, Railway spreads
+connections across replicas):
+
+| op | concurrency | throughput | p50 | p95 | p99 | errors | vs 1 replica |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| solve | 128 | 213.6 rps | 340 ms | 2419 ms | 3508 ms | 0 | 1.47x (144.9 rps) |
+| verify | 512 | 3610 rps | 96 ms | 440 ms | 593 ms | 0 | 2.5x (1458 rps; 2.1x the 1686 rps peak) |
+
+Verify scales linearly. Solve scaled 1.47x, and p95 was worse than one replica
+at the same concurrency, because the split was uneven: during the solve step
+one replica used 20.5 vCPU and the other 10.8. Keep-alive connections are
+pinned to a replica, so a few long-lived client connections can land unevenly.
+Plan on roughly 1.5x per added replica for solve unless callers open fresh
+connections or the balance is confirmed. 4 replicas were not measured.
+
+**Head-of-line blocking** (2 replicas): 60 rps of open-loop background solves
+alone gave p95 598 ms. With 8 concurrent heavy solves added next to it (the 8
+slowest specs, `maxCandidates` 10, `timeLimitMs` 30000; 7.2 rps, solveMs p95
+2.7 s, max ~3.7 s) the background p95 was 606 ms, and no errors appeared in
+either run. Solves run in threadpools, not one at a time per worker, so a
+heavy solve does not block the requests queued behind it while CPU headroom
+remains. No real spec came near the 30 s limit: the heaviest took ~3.7 s even
+at 10 candidates. Pathological specs that do run to the limit were not
+measured. The remaining risk is CPU exhaustion when many heavy solves arrive
+together, which shows up as the queueing in the table above. Cap
+`SOLVER_MAX_TIME_LIMIT_MS` (for example 10 s) and `SOLVER_MAX_CANDIDATES`
+if that becomes a concern.
+
+**Cold start**: a `railway up` redeploy took 240–281 s from upload to SUCCESS,
+almost all of it build queue and image build (BUILDING at ~110–140 s,
+DEPLOYING at ~230–270 s). Container start to all 4 workers healthy took
+1.2–3.6 s per replica, so a replica serves traffic a few seconds after its
+container starts. Cold start under load (scale-up while traffic is flowing)
+was not measured separately.
+
+**Cost** (Railway usage pricing: $20 per vCPU-month, $10 per GB-month): a
+sustained 100 rps of solve uses ~13 vCPU + ~1 GB, about **$270 / month**. A
+sustained 1000 rps of verify uses ~2–3 vCPU + ~1.7 GB, about **$60–80 / month**.
+An idle 4-worker replica costs a few dollars a month.
+
 ## Extension point: generic declarative endpoint
 
 Deliberately **not implemented**. The formulation experiment (typed spec vs

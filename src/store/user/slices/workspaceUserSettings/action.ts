@@ -44,8 +44,6 @@ export class WorkspaceUserSettingsActionImpl {
   }
 
   internal_clearWorkspaceAgentDeviceRoutingOverride = (workspaceId: string, agentId: string) => {
-    if (getActiveWorkspaceId() !== workspaceId) return;
-
     const clearRouting = (preference: WorkspaceUserPreference): WorkspaceUserPreference => {
       const override = preference.agentDeviceOverrides?.[agentId];
       if (!override) return preference;
@@ -64,18 +62,23 @@ export class WorkspaceUserSettingsActionImpl {
       };
     };
 
+    // A function key bypasses the active-workspace augmentation in the global
+    // mutate wrapper, so a request that settles after a Workspace switch still
+    // repairs the cache for the Workspace where it started.
+    void mutate(
+      (key: unknown) =>
+        Array.isArray(key) && key[0] === WORKSPACE_USER_SETTINGS_SWR_KEY && key[1] === workspaceId,
+      (cached: WorkspaceUserPreference | null | undefined) => clearRouting(cached ?? {}),
+      { revalidate: false },
+    );
+
+    if (getActiveWorkspaceId() !== workspaceId) return;
+
     const preference = clearRouting(this.#get().workspaceUserPreference);
     this.#set(
       { workspaceUserPreference: preference, workspaceUserPreferenceWorkspaceId: workspaceId },
       false,
       n('internal_clearWorkspaceAgentDeviceRoutingOverride'),
-    );
-
-    const swrKey = [WORKSPACE_USER_SETTINGS_SWR_KEY, workspaceId];
-    void mutate(
-      swrKey,
-      (cached: WorkspaceUserPreference | null | undefined) => clearRouting(cached ?? {}),
-      { revalidate: false },
     );
   };
 

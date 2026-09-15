@@ -693,11 +693,8 @@ export class AgentSliceActionImpl {
       // 3. Apply returned data, then invalidate the SWR key for later subscribers.
       if (result?.success && result.agent) {
         internal_dispatchAgentMap(id, result.agent);
-        if (workspaceId && result.workspaceUserPreference !== undefined) {
-          getUserStoreState().internal_syncWorkspaceUserPreference(
-            workspaceId,
-            result.workspaceUserPreference,
-          );
+        if (workspaceId) {
+          getUserStoreState().internal_clearWorkspaceAgentDeviceRoutingOverride(workspaceId, id);
         }
         // Refresh agent:config so cached model A cannot replay after a
         // successful model A -> B update.

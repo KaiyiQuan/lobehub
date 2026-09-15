@@ -815,11 +815,7 @@ describe('AgentService', () => {
         }),
         updateConfig: vi.fn().mockResolvedValue(undefined),
       };
-      const updatePreference = vi.fn().mockResolvedValue({
-        preference: {
-          agentDeviceOverrides: { 'agent-1': { localSandbox: true } },
-        },
-      });
+      const updatePreference = vi.fn().mockResolvedValue(undefined);
       const settingsModel = {
         getPreference: vi.fn().mockResolvedValue({
           agentDeviceOverrides: {
@@ -844,7 +840,7 @@ describe('AgentService', () => {
         mockWorkspaceId,
       );
 
-      const result = await workspaceService.updateWorkspaceAgentExecutionDefault('agent-1', {
+      await workspaceService.updateWorkspaceAgentExecutionDefault('agent-1', {
         agencyConfig: { executionTarget: 'sandbox' },
       });
 
@@ -854,9 +850,6 @@ describe('AgentService', () => {
       });
       expect(WorkspaceUserSettingsModel).toHaveBeenCalledWith(tx, mockUserId, mockWorkspaceId);
       expect(updatePreference).toHaveBeenCalledWith({
-        agentDeviceOverrides: { 'agent-1': { localSandbox: true } },
-      });
-      expect(result.workspaceUserPreference).toEqual({
         agentDeviceOverrides: { 'agent-1': { localSandbox: true } },
       });
     });

@@ -833,20 +833,16 @@ describe('AgentSlice Actions', () => {
       );
     });
 
-    it('syncs the Workspace preference returned by an atomic execution-default update', async () => {
+    it('clears only the Workspace routing override after an atomic execution-default update', async () => {
       const { result } = renderHook(() => useAgentStore());
-      const preference = {
-        agentDeviceOverrides: { 'agent-1': { localSandbox: true } },
-      };
       vi.spyOn(activeWorkspaceModule, 'getActiveWorkspaceId').mockReturnValue('workspace-1');
-      const syncPreference = vi.spyOn(
+      const clearRoutingOverride = vi.spyOn(
         useUserStore.getState(),
-        'internal_syncWorkspaceUserPreference',
+        'internal_clearWorkspaceAgentDeviceRoutingOverride',
       );
       vi.mocked(agentService.updateWorkspaceAgentExecutionDefault).mockResolvedValue({
         agent: { id: 'agent-1', agencyConfig: { executionTarget: 'sandbox' } } as any,
         success: true,
-        workspaceUserPreference: preference,
       });
 
       await act(async () => {
@@ -862,7 +858,7 @@ describe('AgentSlice Actions', () => {
         { agencyConfig: { executionTarget: 'sandbox' } },
         expect.any(AbortSignal),
       );
-      expect(syncPreference).toHaveBeenCalledWith('workspace-1', preference);
+      expect(clearRoutingOverride).toHaveBeenCalledWith('workspace-1', 'agent-1');
       expect(agentService.updateAgentConfig).not.toHaveBeenCalled();
     });
 

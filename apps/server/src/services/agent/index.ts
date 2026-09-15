@@ -293,7 +293,7 @@ export class AgentService {
       const override = preference.agentDeviceOverrides?.[agentId];
 
       if (!override?.executionTarget && !override?.boundDeviceId) {
-        return { ...result, workspaceUserPreference: preference };
+        return result;
       }
 
       const {
@@ -301,20 +301,10 @@ export class AgentService {
         executionTarget: _executionTarget,
         ...dormantOverride
       } = override;
-      const row = await settingsModel.updatePreference({
+      await settingsModel.updatePreference({
         agentDeviceOverrides: { [agentId]: dormantOverride },
       });
-
-      return {
-        ...result,
-        workspaceUserPreference: row?.preference ?? {
-          ...preference,
-          agentDeviceOverrides: {
-            ...preference.agentDeviceOverrides,
-            [agentId]: dormantOverride,
-          },
-        },
-      };
+      return result;
     });
   }
 }

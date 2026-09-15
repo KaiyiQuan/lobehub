@@ -24,9 +24,8 @@ type Setter = StoreSetter<UserStore>;
  * auto-refetches; personal mode short-circuits without hitting the network
  * (the row doesn't exist there and the server would reject the request).
  *
- * Writes go through the tRPC mutation, then merge the returned bucket back
- * into local state so pickers observe their pick immediately without waiting
- * for the SWR revalidation cycle.
+ * Writes go through the tRPC mutation and mirror optimistic changes into both
+ * state layers so pickers observe their pick immediately.
  */
 export const createWorkspaceUserSettingsSlice = (
   set: Setter,
@@ -44,18 +43,39 @@ export class WorkspaceUserSettingsActionImpl {
     this.#get = get;
   }
 
-  internal_syncWorkspaceUserPreference = (
-    workspaceId: string,
-    preference: WorkspaceUserPreference,
-  ): void => {
-    const swrKey = [WORKSPACE_USER_SETTINGS_SWR_KEY, workspaceId];
-    void mutate(swrKey, preference, { revalidate: false });
-
+  internal_clearWorkspaceAgentDeviceRoutingOverride = (workspaceId: string, agentId: string) => {
     if (getActiveWorkspaceId() !== workspaceId) return;
+
+    const clearRouting = (preference: WorkspaceUserPreference): WorkspaceUserPreference => {
+      const override = preference.agentDeviceOverrides?.[agentId];
+      if (!override) return preference;
+
+      const {
+        boundDeviceId: _boundDeviceId,
+        executionTarget: _executionTarget,
+        ...dormantOverride
+      } = override;
+      return {
+        ...preference,
+        agentDeviceOverrides: {
+          ...preference.agentDeviceOverrides,
+          [agentId]: dormantOverride,
+        },
+      };
+    };
+
+    const preference = clearRouting(this.#get().workspaceUserPreference);
     this.#set(
       { workspaceUserPreference: preference, workspaceUserPreferenceWorkspaceId: workspaceId },
       false,
-      n('internal_syncWorkspaceUserPreference'),
+      n('internal_clearWorkspaceAgentDeviceRoutingOverride'),
+    );
+
+    const swrKey = [WORKSPACE_USER_SETTINGS_SWR_KEY, workspaceId];
+    void mutate(
+      swrKey,
+      (cached: WorkspaceUserPreference | null | undefined) => clearRouting(cached ?? {}),
+      { revalidate: false },
     );
   };
 

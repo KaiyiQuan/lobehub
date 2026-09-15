@@ -21,28 +21,55 @@ describe('WorkspaceUserSettingsActionImpl', () => {
     vi.clearAllMocks();
   });
 
-  it('syncs an atomically returned Workspace preference into the store and SWR cache', () => {
+  it('clears routing fields without replacing newer Workspace preference values', () => {
     const state = {
-      workspaceUserPreference: {},
-      workspaceUserPreferenceWorkspaceId: null as string | null,
-    };
-    const preference = {
-      agentDeviceOverrides: { 'agent-1': { localSandbox: true } },
+      workspaceUserPreference: {
+        agentDeviceOverrides: {
+          'agent-1': {
+            boundDeviceId: 'personal-device',
+            executionTarget: 'local' as const,
+            localSandbox: true,
+          },
+          'agent-2': { executionTarget: 'sandbox' as const },
+        },
+        sidebarAgentVisibilityOverrides: { newer: true },
+      },
+      workspaceUserPreferenceWorkspaceId: 'workspace-1' as string | null,
     };
     const set = vi.fn((patch: Partial<typeof state>) => Object.assign(state, patch));
     const action = new WorkspaceUserSettingsActionImpl(set as never, () => state as never);
 
-    action.internal_syncWorkspaceUserPreference('workspace-1', preference);
+    action.internal_clearWorkspaceAgentDeviceRoutingOverride('workspace-1', 'agent-1');
 
-    expect(state).toMatchObject({
-      workspaceUserPreference: preference,
-      workspaceUserPreferenceWorkspaceId: 'workspace-1',
+    expect(state.workspaceUserPreference).toEqual({
+      agentDeviceOverrides: {
+        'agent-1': { localSandbox: true },
+        'agent-2': { executionTarget: 'sandbox' },
+      },
+      sidebarAgentVisibilityOverrides: { newer: true },
     });
     expect(mockMutate).toHaveBeenCalledWith(
       ['FETCH_WORKSPACE_USER_SETTINGS', 'workspace-1'],
-      preference,
+      expect.any(Function),
       { revalidate: false },
     );
+
+    const updateCache = mockMutate.mock.calls[0][1];
+    expect(
+      updateCache({
+        agentDeviceOverrides: {
+          'agent-1': {
+            boundDeviceId: 'cached-device',
+            executionTarget: 'device',
+            localSandboxNetwork: true,
+          },
+        },
+        notification: { desktop: { mention: true } },
+      }),
+    ).toEqual({
+      agentDeviceOverrides: { 'agent-1': { localSandboxNetwork: true } },
+      notification: { desktop: { mention: true } },
+    });
   });
 
   it('optimistically deep-merges one Agent model choice without dropping other choices', async () => {

@@ -115,7 +115,7 @@ Use this scan to identify applicable checks, then read the linked module for its
 - [ ] Keep populated lists visible beneath persistent composers; cap or collapse growing editors.
 - [ ] Status labels describe every member accurately.
 - [ ] Embedded documents collapse to titled rows and expand to full text with subordinate typography.
-- [ ] Agent tool result cards have one job (evidence or artifact), don't restate the reply, show the agent's reading when extraction can be wrong, fold verification into the result, and label guarantee strength honestly.
+- [ ] Agent tool result cards have one job (evidence or artifact), don't restate the reply, show the agent's reading when extraction can be wrong, fold verification into the result, and label guarantee strength honestly. An artifact card carries the whole artifact, leads with its brief, puts refinement on the card, and the prompt stops the reply from restating it.
 
 **Edit — entering & changing content** ([edit.md](references/edit.md))
 

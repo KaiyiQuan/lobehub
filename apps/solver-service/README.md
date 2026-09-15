@@ -134,21 +134,67 @@ curl -X POST localhost:8000/v1/packs/travelplanner/solve \
 
 ## Railway
 
-1. Create a service from this repo with **Root Directory** `apps/solver-service`
-   (so `railway.toml` and the `Dockerfile` sit at the build root).
-2. Set variables: `SOLVER_SERVICE_API_KEY` (random secret), optionally
-   `SOLVER_WORKERS` and `SOLVER_TP_SPLITS`.
-3. `railway.toml` pins the Dockerfile build and the `/health` healthcheck;
-   Railway injects `PORT`.
-4. Redeploy = push to the tracked branch or `railway up`. Roll back via the
-   Railway dashboard deployments list.
+Live deployment (as of 2026-09-15): `https://solver-production-5e66.up.railway.app`
+— Railway project `lobehub-solver-service`, service `solver`, region **us-west2**,
+1 replica, usage-based resources (Hobby plan; elastic, well under the 8 vCPU /
+8 GB cap). `SOLVER_WORKERS=4`, `SOLVER_TP_SPLITS=validation` (~5 MB reference
+data per worker). Reference data is downloaded from the pinned Hugging Face
+revision at image build time.
 
-**Scaling**: throughput ≈ `SOLVER_WORKERS` solves in parallel per replica;
-scale horizontally with more replicas behind the same URL. RAM ≈ 150–250 MB
-baseline per worker (interpreter + ortools) + loaded splits (~33 MB all three,
-~5 MB validation-only) per worker. On small instances prefer
-`SOLVER_WORKERS=2` and/or `SOLVER_TP_SPLITS=validation`. Cold start = image
-start + per-worker data preload (a few seconds).
+Deploy method: **CLI upload (`railway up`) from `apps/solver-service/`**, not a
+GitHub source. The upload makes the service directory itself the build root, so
+the `Dockerfile` works unchanged and the monorepo does not need a Railway
+GitHub connection or a separate branch layout. Redeploy:
+
+```bash
+cd apps/solver-service
+railway up -p <project-id> -s <service-id> -e production -d -m "why"
+# then poll: deployment status goes BUILDING -> DEPLOYING -> SUCCESS
+# (SUCCESS is gated on the /health healthcheck)
+```
+
+Variables (`railway variables` or the dashboard): `SOLVER_SERVICE_API_KEY`
+(required, random secret), `SOLVER_WORKERS`, `SOLVER_TP_SPLITS`. **Rotating the
+API key** = update the variable, which triggers an automatic redeploy; update
+every client (e.g. LobeHub `SOLVER_SERVICE_API_KEY`) at the same time. Roll
+back via the Railway dashboard deployments list.
+
+**Scaling**: throughput ≈ `SOLVER_WORKERS` solves in parallel per replica.
+Vertical: raise `SOLVER_WORKERS` toward the instance's vCPUs. Horizontal: raise
+replica count behind the same URL (`numReplicas` / multi-region config). RAM ≈
+150–250 MB baseline per worker (interpreter + ortools) + loaded splits (~33 MB
+all three, ~5 MB validation-only) per worker. On small instances prefer
+`SOLVER_WORKERS=2` and/or `SOLVER_TP_SPLITS=validation`.
+
+### Load test (2026-09-15, against the deployed URL)
+
+Script: `scripts/loadtest.py` (stdlib-only, fixed mix of 8 feasible validation
+specs; raw results in `.records/solver-service-loadtest/`, not committed).
+Client was a macOS machine in China, so ~670 ms of every latency figure is
+network RTT to us-west2 (measured separately on `/health`: median 0.674 s);
+server-side engine time is `solverMeta.solveMs` ≈ 10–110 ms per solve.
+
+| op | concurrency | requests | throughput | p50 | p95 | error rate |
+| --- | --- | --- | --- | --- | --- | --- |
+| solve | 1 | 60 | 0.93 req/s | 992 ms | 1465 ms | 0% |
+| solve | 8 | 96 | 6.47 req/s | 1156 ms | 1798 ms | 0% |
+| solve | 32 | 160 | 17.69 req/s | 1586 ms | 2492 ms | 0% |
+| verify | 1 | 60 | 1.04 req/s | 888 ms | 1240 ms | 0% |
+| verify | 8 | 96 | 6.90 req/s | 1108 ms | 1482 ms | 0% |
+| verify | 32 | 160 | 16.54 req/s | 1515 ms | 2528 ms | 0% |
+
+Subtracting RTT, one replica with 4 workers sustains far more than 17 req/s of
+solver work; the c=32 numbers are bounded by the client's network, not CPU.
+Scale out when server-side queueing shows up as p95 >> RTT + solveMs, not
+before.
+
+**Cold start** (redeploy with cached image layers): deployment created →
+SUCCESS (healthcheck-gated) in ~48 s, of which container start + 4-worker
+data preload → first healthy `/health` ≈ 13 s. The first solve right after
+SUCCESS answered `optimal` in 0.72 s end-to-end (solveMs 42). Rolling deploys
+keep the old replica serving, so `/health` never went down from the client's
+perspective. Implication for callers: a 30–60 s HTTP timeout covers both
+steady-state latency and a cold first request.
 
 ## Extension point: generic declarative endpoint
 

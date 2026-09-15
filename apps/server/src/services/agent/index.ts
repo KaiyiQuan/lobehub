@@ -11,6 +11,7 @@ import { type PartialDeep } from 'type-fest';
 import { AgentModel } from '@/database/models/agent';
 import { SessionModel } from '@/database/models/session';
 import { UserModel } from '@/database/models/user';
+import { WorkspaceUserSettingsModel } from '@/database/models/workspaceUserSettings';
 import { normalizeInboxAgentAvatar, normalizeInboxAgentTitle } from '@/database/utils/inboxAgent';
 import { getRedisConfig } from '@/envs/redis';
 import {
@@ -264,5 +265,56 @@ export class AgentService {
     if (!agent) throw new TRPCError({ code: 'NOT_FOUND', message: 'Agent not found' });
 
     return { agent: agent as any, success: true };
+  }
+
+  /**
+   * Change a Workspace Agent's shared execution default and remove the
+   * caller's personal routing override in one transaction. Keeping both writes
+   * under the same commit avoids compensation failures that can otherwise
+   * delete the caller's previous device while the Agent update rolls back.
+   */
+  async updateWorkspaceAgentExecutionDefault(
+    agentId: string,
+    value: PartialDeep<AgentItem>,
+  ): Promise<UpdateAgentResult> {
+    const workspaceId = this.workspaceId;
+    if (!workspaceId) {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: 'Workspace Agent execution defaults require an active workspace',
+      });
+    }
+
+    return this.db.transaction(async (tx) => {
+      const agentService = new AgentService(tx, this.userId, workspaceId);
+      const result = await agentService.updateAgentConfig(agentId, value);
+      const settingsModel = new WorkspaceUserSettingsModel(tx, this.userId, workspaceId);
+      const preference = await settingsModel.getPreference();
+      const override = preference.agentDeviceOverrides?.[agentId];
+
+      if (!override?.executionTarget && !override?.boundDeviceId) {
+        return { ...result, workspaceUserPreference: preference };
+      }
+
+      const {
+        boundDeviceId: _boundDeviceId,
+        executionTarget: _executionTarget,
+        ...dormantOverride
+      } = override;
+      const row = await settingsModel.updatePreference({
+        agentDeviceOverrides: { [agentId]: dormantOverride },
+      });
+
+      return {
+        ...result,
+        workspaceUserPreference: row?.preference ?? {
+          ...preference,
+          agentDeviceOverrides: {
+            ...preference.agentDeviceOverrides,
+            [agentId]: dormantOverride,
+          },
+        },
+      };
+    });
   }
 }

@@ -29,6 +29,7 @@ vi.mock('@/services/agent', () => ({
     queryAgents: vi.fn(),
     updateAgentConfig: vi.fn(),
     updateAgentMeta: vi.fn(),
+    updateWorkspaceAgentExecutionDefault: vi.fn(),
   },
 }));
 
@@ -830,6 +831,39 @@ describe('AgentSlice Actions', () => {
         { model: 'gpt-4' },
         expect.any(AbortSignal),
       );
+    });
+
+    it('syncs the Workspace preference returned by an atomic execution-default update', async () => {
+      const { result } = renderHook(() => useAgentStore());
+      const preference = {
+        agentDeviceOverrides: { 'agent-1': { localSandbox: true } },
+      };
+      vi.spyOn(activeWorkspaceModule, 'getActiveWorkspaceId').mockReturnValue('workspace-1');
+      const syncPreference = vi.spyOn(
+        useUserStore.getState(),
+        'internal_syncWorkspaceUserPreference',
+      );
+      vi.mocked(agentService.updateWorkspaceAgentExecutionDefault).mockResolvedValue({
+        agent: { id: 'agent-1', agencyConfig: { executionTarget: 'sandbox' } } as any,
+        success: true,
+        workspaceUserPreference: preference,
+      });
+
+      await act(async () => {
+        await result.current.updateAgentConfigById(
+          'agent-1',
+          { agencyConfig: { executionTarget: 'sandbox' } },
+          { clearWorkspaceUserDeviceRoutingOverride: true },
+        );
+      });
+
+      expect(agentService.updateWorkspaceAgentExecutionDefault).toHaveBeenCalledWith(
+        'agent-1',
+        { agencyConfig: { executionTarget: 'sandbox' } },
+        expect.any(AbortSignal),
+      );
+      expect(syncPreference).toHaveBeenCalledWith('workspace-1', preference);
+      expect(agentService.updateAgentConfig).not.toHaveBeenCalled();
     });
 
     it('does not abort an in-flight save when another agent is updated', async () => {

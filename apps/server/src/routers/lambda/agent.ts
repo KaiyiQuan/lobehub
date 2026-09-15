@@ -1399,6 +1399,7 @@ export const agentRouter = router({
     .input(
       z.object({
         agentId: z.string(),
+        clearWorkspaceUserDeviceRoutingOverride: z.boolean().optional(),
         value: z.object({}).passthrough().partial(),
       }),
     )
@@ -1446,6 +1447,10 @@ export const agentRouter = router({
             message: 'Agent is being edited by another user',
           });
         }
+      }
+
+      if (input.clearWorkspaceUserDeviceRoutingOverride && ctx.workspaceId) {
+        return ctx.agentService.updateWorkspaceAgentExecutionDefault(input.agentId, safeValue);
       }
 
       // Use AgentService to update and return the updated agent data

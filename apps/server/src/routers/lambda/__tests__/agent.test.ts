@@ -958,6 +958,27 @@ describe('agentRouter', () => {
         });
       });
 
+      it('uses the atomic Workspace execution-default mutation when override clearing is requested', async () => {
+        agentServiceMock.updateAgentConfig = vi.fn();
+        agentServiceMock.updateWorkspaceAgentExecutionDefault = vi
+          .fn()
+          .mockResolvedValue({ success: true });
+        vi.spyOn(EditLockService.prototype, 'getBlockingHolder').mockResolvedValue(null);
+
+        const caller = agentRouter.createCaller(wsCtx());
+        await caller.updateAgentConfig({
+          agentId: 'agent-1',
+          clearWorkspaceUserDeviceRoutingOverride: true,
+          value: { agencyConfig: { executionTarget: 'sandbox' } },
+        });
+
+        expect(agentServiceMock.updateWorkspaceAgentExecutionDefault).toHaveBeenCalledWith(
+          'agent-1',
+          { agencyConfig: { executionTarget: 'sandbox' } },
+        );
+        expect(agentServiceMock.updateAgentConfig).not.toHaveBeenCalled();
+      });
+
       it('does not check the lock for personal (non-workspace) agents', async () => {
         agentServiceMock.updateAgentConfig = vi.fn().mockResolvedValue({ id: 'agent-1' });
         const guardSpy = vi.spyOn(EditLockService.prototype, 'getBlockingHolder');

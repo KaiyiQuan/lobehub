@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentModel } from '@/database/models/agent';
 import { SessionModel } from '@/database/models/session';
 import { UserModel } from '@/database/models/user';
+import { WorkspaceUserSettingsModel } from '@/database/models/workspaceUserSettings';
 import type * as RedisModule from '@/libs/redis';
 import { initializeRedisWithPrefix, isRedisEnabled, RedisKeys } from '@/libs/redis';
 import { parseAgentConfig } from '@/server/globalConfig/parseDefaultAgent';
@@ -35,6 +36,10 @@ vi.mock('@/database/models/agent', () => ({
 
 vi.mock('@/database/models/user', () => ({
   UserModel: vi.fn(),
+}));
+
+vi.mock('@/database/models/workspaceUserSettings', () => ({
+  WorkspaceUserSettingsModel: vi.fn(),
 }));
 
 vi.mock('@/envs/redis', () => ({
@@ -797,6 +802,62 @@ describe('AgentService', () => {
       ).rejects.toMatchObject({
         code: 'NOT_FOUND',
         message: 'Agent not found',
+      });
+    });
+
+    it('atomically updates a Workspace default and clears only caller routing fields', async () => {
+      const tx = {} as any;
+      const transaction = vi.fn(async (callback: (db: typeof tx) => unknown) => callback(tx));
+      const mockAgentModel = {
+        getAgentConfigById: vi.fn().mockResolvedValue({
+          agencyConfig: { executionTarget: 'sandbox' },
+          id: 'agent-1',
+        }),
+        updateConfig: vi.fn().mockResolvedValue(undefined),
+      };
+      const updatePreference = vi.fn().mockResolvedValue({
+        preference: {
+          agentDeviceOverrides: { 'agent-1': { localSandbox: true } },
+        },
+      });
+      const settingsModel = {
+        getPreference: vi.fn().mockResolvedValue({
+          agentDeviceOverrides: {
+            'agent-1': {
+              boundDeviceId: 'personal-device',
+              executionTarget: 'local',
+              localSandbox: true,
+            },
+          },
+        }),
+        updatePreference,
+      };
+      vi.mocked(AgentModel).mockImplementation(function () {
+        return mockAgentModel as any;
+      });
+      vi.mocked(WorkspaceUserSettingsModel).mockImplementation(function () {
+        return settingsModel as any;
+      });
+      const workspaceService = new AgentService(
+        { transaction } as any,
+        mockUserId,
+        mockWorkspaceId,
+      );
+
+      const result = await workspaceService.updateWorkspaceAgentExecutionDefault('agent-1', {
+        agencyConfig: { executionTarget: 'sandbox' },
+      });
+
+      expect(transaction).toHaveBeenCalledTimes(1);
+      expect(mockAgentModel.updateConfig).toHaveBeenCalledWith('agent-1', {
+        agencyConfig: { executionTarget: 'sandbox' },
+      });
+      expect(WorkspaceUserSettingsModel).toHaveBeenCalledWith(tx, mockUserId, mockWorkspaceId);
+      expect(updatePreference).toHaveBeenCalledWith({
+        agentDeviceOverrides: { 'agent-1': { localSandbox: true } },
+      });
+      expect(result.workspaceUserPreference).toEqual({
+        agentDeviceOverrides: { 'agent-1': { localSandbox: true } },
       });
     });
   });

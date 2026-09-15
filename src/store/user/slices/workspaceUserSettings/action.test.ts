@@ -21,6 +21,30 @@ describe('WorkspaceUserSettingsActionImpl', () => {
     vi.clearAllMocks();
   });
 
+  it('syncs an atomically returned Workspace preference into the store and SWR cache', () => {
+    const state = {
+      workspaceUserPreference: {},
+      workspaceUserPreferenceWorkspaceId: null as string | null,
+    };
+    const preference = {
+      agentDeviceOverrides: { 'agent-1': { localSandbox: true } },
+    };
+    const set = vi.fn((patch: Partial<typeof state>) => Object.assign(state, patch));
+    const action = new WorkspaceUserSettingsActionImpl(set as never, () => state as never);
+
+    action.internal_syncWorkspaceUserPreference('workspace-1', preference);
+
+    expect(state).toMatchObject({
+      workspaceUserPreference: preference,
+      workspaceUserPreferenceWorkspaceId: 'workspace-1',
+    });
+    expect(mockMutate).toHaveBeenCalledWith(
+      ['FETCH_WORKSPACE_USER_SETTINGS', 'workspace-1'],
+      preference,
+      { revalidate: false },
+    );
+  });
+
   it('optimistically deep-merges one Agent model choice without dropping other choices', async () => {
     const state = {
       workspaceUserPreference: {

@@ -28,15 +28,12 @@ export interface SelectExecutionTargetOptions {
  * entry edits the Agent default that future Topics inherit.
  */
 export const useSelectExecutionTarget = (agentId: string) => {
-  const workspaceDefaultSaveQueueRef = useSingleton(() => ({ current: Promise.resolve() }));
+  const selectionVersionRef = useSingleton(() => ({ current: 0 }));
+  const workspaceSaveQueueRef = useSingleton(() => ({ current: Promise.resolve() }));
   const { agencyConfig: topicAgencyConfig, canSelectExecutionTarget } =
     useTopicAgencyConfig(agentId);
   const topicId = useChatStore((s) => (s.activeAgentId === agentId ? s.activeTopicId : undefined));
 
-  // Agent-default writes deliberately use the shared row rather than the
-  // effective Topic/member overlay. Workspace routing below decides whether a
-  // pick belongs in that row or in this member's per-Agent preference.
-  const agencyConfig = useAgentStore(agentByIdSelectors.getAgencyConfigById(agentId));
   const isHetero = useAgentStore(agentByIdSelectors.isAgentHeterogeneousById(agentId));
   const isWorkspaceAgent = useAgentStore((s) => Boolean(s.agentMap[agentId]?.workspaceId));
   const isPublicWorkspaceAgent = useAgentStore((s) => {
@@ -48,7 +45,6 @@ export const useSelectExecutionTarget = (agentId: string) => {
   const usesWorkspaceMemberSelection = isPublicWorkspaceAgent && !canManageAgent;
 
   const updateWorkspaceUserPreference = useUserStore((s) => s.updateWorkspaceUserPreference);
-  const workspaceUserPreference = useUserStore((s) => s.workspaceUserPreference);
 
   const gatewayDeviceInfo = useElectronStore((s) => s.gatewayDeviceInfo);
   const currentDeviceId = isDesktop ? gatewayDeviceInfo?.deviceId : undefined;
@@ -60,6 +56,8 @@ export const useSelectExecutionTarget = (agentId: string) => {
       options?: SelectExecutionTargetOptions,
     ) => {
       if (!canSelectExecutionTarget) return;
+      const selectionVersion = ++selectionVersionRef.current;
+      const isLatestSelection = () => selectionVersionRef.current === selectionVersion;
 
       const localSandboxPatch = {
         ...(options?.localSandbox === undefined ? {} : { localSandbox: options.localSandbox }),
@@ -77,6 +75,7 @@ export const useSelectExecutionTarget = (agentId: string) => {
             if (!boundDeviceId) return;
           }
           if (target === 'device' && !boundDeviceId) return;
+          if (!isLatestSelection()) return;
 
           await useChatStore.getState().updateTopicMetadata(topicId, {
             executionConfig: {
@@ -93,8 +92,7 @@ export const useSelectExecutionTarget = (agentId: string) => {
         return;
       }
 
-      const previousBoundDeviceId = agencyConfig?.boundDeviceId;
-      let nextBoundDeviceId = target === 'device' ? deviceId : previousBoundDeviceId;
+      let nextBoundDeviceId = target === 'device' ? deviceId : undefined;
       if (target === 'local') {
         nextBoundDeviceId = currentDeviceId;
         if (!nextBoundDeviceId) {
@@ -106,6 +104,7 @@ export const useSelectExecutionTarget = (agentId: string) => {
         }
         if (isHetero && !nextBoundDeviceId) return;
       }
+      if (!isLatestSelection()) return;
 
       // The callback may have yielded while discovering the local device. Do
       // not turn an Agent-default pick into a save after the user entered a
@@ -113,113 +112,94 @@ export const useSelectExecutionTarget = (agentId: string) => {
       const chat = useChatStore.getState();
       if (chat.activeAgentId !== agentId || chat.activeTopicId) return;
 
-      const previousOverride = workspaceUserPreference.agentDeviceOverrides?.[agentId];
       const updatesOnlyWorkspaceSandboxSettings =
         isWorkspaceAgent &&
         target !== 'local' &&
         (options?.localSandbox !== undefined || options?.localSandboxNetwork !== undefined);
 
-      // A member selection is personal to that Workspace member. `local` is
-      // also always personal, including for managers/private-Agent owners,
-      // because a personal desktop device must never enter the shared row.
-      // Sandbox flags are personal too, even when edited while another target
-      // is active; in that case preserve the existing routing fields.
-      if (
-        usesWorkspaceMemberSelection ||
-        (isWorkspaceAgent && target === 'local') ||
-        updatesOnlyWorkspaceSandboxSettings
-      ) {
-        const nextOverride = {
-          ...previousOverride,
-          ...(updatesOnlyWorkspaceSandboxSettings
-            ? {}
-            : {
-                executionTarget: target,
-                ...(nextBoundDeviceId ? { boundDeviceId: nextBoundDeviceId } : {}),
-              }),
-          ...localSandboxPatch,
-        };
-
-        try {
-          await updateWorkspaceUserPreference({
-            agentDeviceOverrides: { [agentId]: nextOverride },
-          });
-        } catch {
-          if (!options?.silent) toast.error(t('saveAgentConfigFail', { ns: 'common' }));
-        }
-        return;
-      }
-
-      const saveAgentDefault = async () => {
+      const saveAgentDefault = async (clearWorkspaceUserDeviceRoutingOverride = false) => {
+        if (!isLatestSelection()) return;
         const currentChat = useChatStore.getState();
         if (currentChat.activeAgentId !== agentId || currentChat.activeTopicId) return;
-
-        // Clear a manager's personal routing override before changing the
-        // shared default. If either write fails, other members keep the old
-        // shared value; a failed shared write restores this caller's override.
-        let clearedRoutingOverride = false;
-        if (
-          isWorkspaceAgent &&
-          previousOverride &&
-          (previousOverride.executionTarget !== undefined ||
-            previousOverride.boundDeviceId !== undefined)
-        ) {
-          const { boundDeviceId: _device, executionTarget: _target, ...dormant } = previousOverride;
-          try {
-            await updateWorkspaceUserPreference({
-              agentDeviceOverrides: { [agentId]: dormant },
-            });
-            clearedRoutingOverride = true;
-          } catch {
-            if (!options?.silent) toast.error(t('saveAgentConfigFail', { ns: 'common' }));
-            return;
-          }
-        }
 
         try {
           await updateAgentConfigById(
             agentId,
             {
               agencyConfig: {
-                ...agencyConfig,
                 executionTarget: target,
                 ...(nextBoundDeviceId ? { boundDeviceId: nextBoundDeviceId } : {}),
                 ...localSandboxPatch,
               },
             },
             {
+              ...(clearWorkspaceUserDeviceRoutingOverride
+                ? { clearWorkspaceUserDeviceRoutingOverride: true }
+                : {}),
               rethrow: true,
               ...(options?.silent ? { showErrorMessage: false } : {}),
             },
           );
         } catch {
-          if (clearedRoutingOverride && previousOverride) {
-            try {
-              await updateWorkspaceUserPreference({
-                agentDeviceOverrides: { [agentId]: previousOverride },
-              });
-            } catch (error) {
-              console.error(
-                '[useSelectExecutionTarget] Failed to restore workspace override:',
-                error,
-              );
-            }
-          }
+          // The Agent store owns rollback and user-visible failure feedback.
         }
       };
 
       if (!isWorkspaceAgent) return saveAgentDefault();
 
-      // Shared saves must not overlap: the Agent store aborts an older update
-      // for the same Agent, which would otherwise make its rollback shadow a
-      // newer selection with the previous personal override.
-      const save = workspaceDefaultSaveQueueRef.current.then(saveAgentDefault, saveAgentDefault);
-      workspaceDefaultSaveQueueRef.current = save;
+      const saveWorkspaceSelection = async () => {
+        if (!isLatestSelection()) return;
+        const currentChat = useChatStore.getState();
+        if (currentChat.activeAgentId !== agentId || currentChat.activeTopicId) return;
+
+        // A member selection is personal to that Workspace member. `local` is
+        // also always personal, including for managers/private-Agent owners,
+        // because a personal desktop device must never enter the shared row.
+        // Read the override only when this queued task starts so a prior
+        // success or rollback cannot be overwritten by a stale render.
+        if (
+          usesWorkspaceMemberSelection ||
+          target === 'local' ||
+          updatesOnlyWorkspaceSandboxSettings
+        ) {
+          const previousOverride =
+            useUserStore.getState().workspaceUserPreference.agentDeviceOverrides?.[agentId];
+          const nextOverride = {
+            ...previousOverride,
+            ...(updatesOnlyWorkspaceSandboxSettings
+              ? {}
+              : {
+                  executionTarget: target,
+                  ...(nextBoundDeviceId ? { boundDeviceId: nextBoundDeviceId } : {}),
+                }),
+            ...localSandboxPatch,
+          };
+
+          try {
+            await updateWorkspaceUserPreference({
+              agentDeviceOverrides: { [agentId]: nextOverride },
+            });
+          } catch {
+            if (!options?.silent) toast.error(t('saveAgentConfigFail', { ns: 'common' }));
+          }
+          return;
+        }
+
+        await saveAgentDefault(true);
+      };
+
+      // One queue covers both per-user and shared writes for this Agent. This
+      // prevents optimistic rollbacks and server read-merge-write requests
+      // from completing out of order after rapid selections.
+      const save = workspaceSaveQueueRef.current.then(
+        saveWorkspaceSelection,
+        saveWorkspaceSelection,
+      );
+      workspaceSaveQueueRef.current = save;
       await save;
     },
     [
       agentId,
-      agencyConfig,
       canSelectExecutionTarget,
       currentDeviceId,
       isHetero,
@@ -229,7 +209,6 @@ export const useSelectExecutionTarget = (agentId: string) => {
       updateAgentConfigById,
       updateWorkspaceUserPreference,
       usesWorkspaceMemberSelection,
-      workspaceUserPreference,
     ],
   );
 };

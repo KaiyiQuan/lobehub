@@ -46,7 +46,12 @@ const state = vi.hoisted(() => ({
     workspaceUserPreference: {} as {
       agentDeviceOverrides?: Record<
         string,
-        { boundDeviceId?: string; executionTarget?: string; localSandbox?: boolean }
+        {
+          boundDeviceId?: string;
+          executionTarget?: string;
+          localSandbox?: boolean;
+          localSandboxNetwork?: boolean;
+        }
       >;
     },
   },
@@ -87,7 +92,10 @@ vi.mock('@/store/electron', () => ({
   useElectronStore: (selector: (s: typeof state.electron) => unknown) => selector(state.electron),
 }));
 vi.mock('@/store/user', () => ({
-  useUserStore: (selector: (s: typeof state.user) => unknown) => selector(state.user),
+  useUserStore: Object.assign(
+    (selector: (s: typeof state.user) => unknown) => selector(state.user),
+    { getState: () => state.user },
+  ),
 }));
 
 describe('useSelectExecutionTarget', () => {
@@ -177,7 +185,7 @@ describe('useSelectExecutionTarget', () => {
 
       expect(state.agent.updateAgentConfigById).toHaveBeenCalledWith(
         'agent-id',
-        { agencyConfig: { boundDeviceId: 'device-a', executionTarget: 'sandbox' } },
+        { agencyConfig: { executionTarget: 'sandbox' } },
         { rethrow: true },
       );
       expect(state.chat.createTopic).not.toHaveBeenCalled();
@@ -262,7 +270,7 @@ describe('useSelectExecutionTarget', () => {
       expect(state.agent.updateAgentConfigById).toHaveBeenCalledWith(
         'agent-id',
         { agencyConfig: { boundDeviceId: 'workspace-device', executionTarget: 'device' } },
-        { rethrow: true },
+        { clearWorkspaceUserDeviceRoutingOverride: true, rethrow: true },
       );
       expect(state.user.updateWorkspaceUserPreference).not.toHaveBeenCalled();
       expect(state.chat.createTopic).not.toHaveBeenCalled();
@@ -308,7 +316,7 @@ describe('useSelectExecutionTarget', () => {
       expect(state.agent.updateAgentConfigById).not.toHaveBeenCalled();
     });
 
-    it("clears a Workspace manager's stale routing override after changing the shared default", async () => {
+    it("clears a Workspace manager's stale routing override atomically with the shared default", async () => {
       state.agent.agentMap = {
         'agent-id': { visibility: 'public', workspaceId: 'workspace-id' },
       };
@@ -325,20 +333,15 @@ describe('useSelectExecutionTarget', () => {
 
       await result.current('sandbox');
 
-      expect(state.user.updateWorkspaceUserPreference).toHaveBeenCalledWith({
-        agentDeviceOverrides: { 'agent-id': { localSandbox: true } },
-      });
       expect(state.agent.updateAgentConfigById).toHaveBeenCalledWith(
         'agent-id',
         { agencyConfig: { executionTarget: 'sandbox' } },
-        { rethrow: true },
+        { clearWorkspaceUserDeviceRoutingOverride: true, rethrow: true },
       );
-      expect(state.user.updateWorkspaceUserPreference.mock.invocationCallOrder[0]).toBeLessThan(
-        state.agent.updateAgentConfigById.mock.invocationCallOrder[0],
-      );
+      expect(state.user.updateWorkspaceUserPreference).not.toHaveBeenCalled();
     });
 
-    it("restores a Workspace manager's routing override when the shared save fails", async () => {
+    it("does not mutate a Workspace manager's routing override separately when the shared save fails", async () => {
       state.agent.agentMap = {
         'agent-id': { visibility: 'public', workspaceId: 'workspace-id' },
       };
@@ -356,36 +359,12 @@ describe('useSelectExecutionTarget', () => {
 
       await result.current('sandbox');
 
-      expect(state.user.updateWorkspaceUserPreference).toHaveBeenNthCalledWith(1, {
-        agentDeviceOverrides: { 'agent-id': { localSandbox: true } },
-      });
-      expect(state.user.updateWorkspaceUserPreference).toHaveBeenNthCalledWith(2, {
-        agentDeviceOverrides: {
-          'agent-id': {
-            boundDeviceId: 'this-machine',
-            executionTarget: 'local',
-            localSandbox: true,
-          },
-        },
-      });
-    });
-
-    it('does not change the shared default when clearing a manager override fails', async () => {
-      state.agent.agentMap = {
-        'agent-id': { visibility: 'public', workspaceId: 'workspace-id' },
-      };
-      state.user.workspaceUserPreference = {
-        agentDeviceOverrides: {
-          'agent-id': { boundDeviceId: 'this-machine', executionTarget: 'local' },
-        },
-      };
-      state.user.updateWorkspaceUserPreference.mockRejectedValue(new Error('network'));
-      const { result } = renderHook(() => useSelectExecutionTarget('agent-id'));
-
-      await result.current('sandbox');
-
-      expect(state.agent.updateAgentConfigById).not.toHaveBeenCalled();
-      expect(state.toast).toHaveBeenCalledWith('saveAgentConfigFail');
+      expect(state.agent.updateAgentConfigById).toHaveBeenCalledWith(
+        'agent-id',
+        { agencyConfig: { executionTarget: 'sandbox' } },
+        { clearWorkspaceUserDeviceRoutingOverride: true, rethrow: true },
+      );
+      expect(state.user.updateWorkspaceUserPreference).not.toHaveBeenCalled();
     });
 
     it('serializes rapid Workspace manager shared-default selections', async () => {
@@ -422,9 +401,73 @@ describe('useSelectExecutionTarget', () => {
         2,
         'agent-id',
         { agencyConfig: { boundDeviceId: 'workspace-device', executionTarget: 'device' } },
-        { rethrow: true },
+        { clearWorkspaceUserDeviceRoutingOverride: true, rethrow: true },
       );
-      expect(state.user.updateWorkspaceUserPreference).toHaveBeenCalledTimes(2);
+      expect(state.user.updateWorkspaceUserPreference).not.toHaveBeenCalled();
+    });
+
+    it('serializes rapid Workspace member selections after a failed write', async () => {
+      state.access.canManageAgent = false;
+      state.agent.agentMap = {
+        'agent-id': { visibility: 'public', workspaceId: 'workspace-id' },
+      };
+      let rejectFirst!: (error: Error) => void;
+      state.user.updateWorkspaceUserPreference
+        .mockImplementationOnce(
+          () =>
+            new Promise<void>((_resolve, reject) => {
+              rejectFirst = reject;
+            }),
+        )
+        .mockResolvedValueOnce(undefined);
+      const { result } = renderHook(() => useSelectExecutionTarget('agent-id'));
+
+      const firstSelection = result.current('sandbox');
+      await vi.waitFor(() =>
+        expect(state.user.updateWorkspaceUserPreference).toHaveBeenCalledTimes(1),
+      );
+
+      const secondSelection = result.current('device', 'workspace-device');
+      await Promise.resolve();
+      expect(state.user.updateWorkspaceUserPreference).toHaveBeenCalledTimes(1);
+
+      rejectFirst(new Error('network'));
+      await Promise.all([firstSelection, secondSelection]);
+
+      expect(state.user.updateWorkspaceUserPreference).toHaveBeenNthCalledWith(2, {
+        agentDeviceOverrides: {
+          'agent-id': { boundDeviceId: 'workspace-device', executionTarget: 'device' },
+        },
+      });
+    });
+
+    it('does not let delayed local discovery overwrite a newer Workspace member selection', async () => {
+      state.access.canManageAgent = false;
+      state.agent.agentMap = {
+        'agent-id': { visibility: 'public', workspaceId: 'workspace-id' },
+      };
+      state.desktop = true;
+      let resolveDeviceInfo!: (value: { deviceId: string }) => void;
+      state.deviceInfo.mockReturnValue(
+        new Promise((resolve) => {
+          resolveDeviceInfo = resolve;
+        }),
+      );
+      const { result } = renderHook(() => useSelectExecutionTarget('agent-id'));
+
+      const delayedLocalSelection = result.current('local');
+      const newerSandboxSelection = result.current('sandbox');
+      await newerSandboxSelection;
+
+      expect(state.user.updateWorkspaceUserPreference).toHaveBeenCalledOnce();
+      expect(state.user.updateWorkspaceUserPreference).toHaveBeenCalledWith({
+        agentDeviceOverrides: { 'agent-id': { executionTarget: 'sandbox' } },
+      });
+
+      resolveDeviceInfo({ deviceId: 'this-machine' });
+      await delayedLocalSelection;
+
+      expect(state.user.updateWorkspaceUserPreference).toHaveBeenCalledOnce();
     });
 
     it('reports an Agent-setting failure when a Workspace member override cannot be saved', async () => {

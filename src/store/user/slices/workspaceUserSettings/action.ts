@@ -44,6 +44,21 @@ export class WorkspaceUserSettingsActionImpl {
     this.#get = get;
   }
 
+  internal_syncWorkspaceUserPreference = (
+    workspaceId: string,
+    preference: WorkspaceUserPreference,
+  ): void => {
+    const swrKey = [WORKSPACE_USER_SETTINGS_SWR_KEY, workspaceId];
+    void mutate(swrKey, preference, { revalidate: false });
+
+    if (getActiveWorkspaceId() !== workspaceId) return;
+    this.#set(
+      { workspaceUserPreference: preference, workspaceUserPreferenceWorkspaceId: workspaceId },
+      false,
+      n('internal_syncWorkspaceUserPreference'),
+    );
+  };
+
   useFetchWorkspaceUserPreference = () => {
     const workspaceId = useActiveWorkspaceId();
     const swr = useClientDataSWR<WorkspaceUserPreference | null>(

@@ -248,6 +248,17 @@ class AgentService {
     );
   };
 
+  updateWorkspaceAgentExecutionDefault = async (
+    agentId: string,
+    config: PartialDeep<LobeAgentConfig>,
+    signal?: AbortSignal,
+  ) => {
+    return lambdaClient.agent.updateAgentConfig.mutate(
+      { agentId, clearWorkspaceUserDeviceRoutingOverride: true, value: config },
+      { context: { showNotification: false }, signal },
+    );
+  };
+
   /**
    * Update agent meta and return the updated agent data
    */

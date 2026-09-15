@@ -64,6 +64,8 @@ type AgentMetaUpdate = Partial<
 type AgencyConfigPatch = PartialDeep<LobeAgentAgencyConfig>;
 
 interface AgentConfigUpdateOptions {
+  /** Atomically clear the caller's Workspace device routing override with this shared update. */
+  clearWorkspaceUserDeviceRoutingOverride?: boolean;
   /** Propagate the persistence failure so a scoped editor can render failed + Retry. */
   rethrow?: boolean;
   /** Keep generic error messaging for ordinary config controls. @default true */
@@ -681,11 +683,22 @@ export class AgentSliceActionImpl {
 
     try {
       // 2. API call returns updated agent data
-      const result = await agentService.updateAgentConfig(id, mergedData, signal);
+      const workspaceId = options?.clearWorkspaceUserDeviceRoutingOverride
+        ? getActiveWorkspaceId()
+        : undefined;
+      const result = options?.clearWorkspaceUserDeviceRoutingOverride
+        ? await agentService.updateWorkspaceAgentExecutionDefault(id, mergedData, signal)
+        : await agentService.updateAgentConfig(id, mergedData, signal);
 
       // 3. Apply returned data, then invalidate the SWR key for later subscribers.
       if (result?.success && result.agent) {
         internal_dispatchAgentMap(id, result.agent);
+        if (workspaceId && result.workspaceUserPreference !== undefined) {
+          getUserStoreState().internal_syncWorkspaceUserPreference(
+            workspaceId,
+            result.workspaceUserPreference,
+          );
+        }
         // Refresh agent:config so cached model A cannot replay after a
         // successful model A -> B update.
         await this.#get().internal_refreshAgentConfig(id);

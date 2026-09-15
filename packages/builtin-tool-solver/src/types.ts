@@ -8,7 +8,7 @@ export const SolverApiName = {
 export type SolverApiNameType = (typeof SolverApiName)[keyof typeof SolverApiName];
 
 /**
- * Solver service contract (mirror of apps/solver-service).
+ * Solver service contract (mirror of the deployed solver service).
  *
  * The service is intentionally generic over domain packs: every endpoint is
  * namespaced by `pack` and the spec/plan payloads are pack-defined JSON. The

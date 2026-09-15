@@ -452,7 +452,7 @@ const builtinToolRegistry: LobeBuiltinTool[] = [
     type: 'builtin',
   },
   {
-    // Server-side constraint solver (apps/solver-service). Offered to agents
+    // Server-side constraint solver (external service). Offered to agents
     // only when SOLVER_SERVICE_URL + SOLVER_SERVICE_API_KEY are configured —
     // the gates live in the server AgentToolsEngine (physical manifest drop)
     // and the frontend toolEngineering mirror.

@@ -20,7 +20,7 @@ export const VerifyInspector = memo<BuiltinInspectorProps<VerifyParams, VerifySt
     if (isArgumentsStreaming && !pack) {
       return (
         <div className={cx(inspectorTextStyles.root, shinyTextStyles.shinyText)}>
-          <span>{t('builtins.lobe-solver.apiName.verify.loading')}</span>
+          <span>{t('builtins.builtin-solver.apiName.verify.loading')}</span>
         </div>
       );
     }
@@ -30,8 +30,8 @@ export const VerifyInspector = memo<BuiltinInspectorProps<VerifyParams, VerifySt
         <span>
           {t(
             inProgress
-              ? 'builtins.lobe-solver.apiName.verify.loading'
-              : 'builtins.lobe-solver.apiName.verify.completed',
+              ? 'builtins.builtin-solver.apiName.verify.loading'
+              : 'builtins.builtin-solver.apiName.verify.completed',
           )}
         </span>
         {!inProgress && pluginState && (
@@ -40,8 +40,8 @@ export const VerifyInspector = memo<BuiltinInspectorProps<VerifyParams, VerifySt
             <span className={highlightTextStyles.primary}>
               {t(
                 pluginState.pass
-                  ? 'builtins.lobe-solver.inspector.verifyPass'
-                  : 'builtins.lobe-solver.inspector.verifyFail',
+                  ? 'builtins.builtin-solver.inspector.verifyPass'
+                  : 'builtins.builtin-solver.inspector.verifyFail',
               )}
             </span>
             <Text as={'span'} style={{ color: cssVar.colorTextSecondary, fontSize: 12 }}>

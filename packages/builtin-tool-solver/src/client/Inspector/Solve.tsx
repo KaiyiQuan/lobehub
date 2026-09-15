@@ -28,7 +28,7 @@ export const SolveInspector = memo<BuiltinInspectorProps<SolveParams, SolveState
     if (isArgumentsStreaming && !pack) {
       return (
         <div className={cx(inspectorTextStyles.root, shinyTextStyles.shinyText)}>
-          <span>{t('builtins.lobe-solver.apiName.solve.loading', { pack: '…' })}</span>
+          <span>{t('builtins.builtin-solver.apiName.solve.loading', { pack: '…' })}</span>
         </div>
       );
     }
@@ -42,8 +42,8 @@ export const SolveInspector = memo<BuiltinInspectorProps<SolveParams, SolveState
         <span>
           {t(
             inProgress
-              ? 'builtins.lobe-solver.apiName.solve.loading'
-              : 'builtins.lobe-solver.apiName.solve.completed',
+              ? 'builtins.builtin-solver.apiName.solve.loading'
+              : 'builtins.builtin-solver.apiName.solve.completed',
             { pack },
           )}
         </span>
@@ -51,7 +51,7 @@ export const SolveInspector = memo<BuiltinInspectorProps<SolveParams, SolveState
           <>
             <span>:&nbsp;</span>
             <span className={highlightTextStyles.primary}>
-              {t(`builtins.lobe-solver.inspector.status.${STATUS_KEY[status]}`)}
+              {t(`builtins.builtin-solver.inspector.status.${STATUS_KEY[status]}`)}
             </span>
             {(status === 'optimal' || status === 'feasible_timeout') &&
               typeof bestCandidate?.totalCost === 'number' && (
@@ -61,7 +61,7 @@ export const SolveInspector = memo<BuiltinInspectorProps<SolveParams, SolveState
               )}
             {status === 'infeasible' && conflictCount > 0 && (
               <Text as={'span'} style={{ color: cssVar.colorTextSecondary, fontSize: 12 }}>
-                &nbsp;({t('builtins.lobe-solver.inspector.conflicts', { count: conflictCount })})
+                &nbsp;({t('builtins.builtin-solver.inspector.conflicts', { count: conflictCount })})
               </Text>
             )}
           </>

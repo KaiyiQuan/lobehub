@@ -38,7 +38,7 @@ const buildEngineResult = (plugins: string[]) => {
   };
 };
 
-describe('lobe-solver env gating', () => {
+describe('builtin-solver env gating', () => {
   beforeEach(() => {
     mockToolsEnv.SOLVER_SERVICE_API_KEY = undefined;
     mockToolsEnv.SOLVER_SERVICE_URL = undefined;

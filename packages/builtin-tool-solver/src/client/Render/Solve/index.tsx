@@ -11,7 +11,7 @@ import CandidateList from './CandidateList';
 import InfeasibleResult from './InfeasibleResult';
 
 /**
- * Rich result card for lobe-solver solve calls:
+ * Rich result card for builtin-solver solve calls:
  * - optimal / feasible_timeout → candidate plans with key facts (feasible_timeout
  *   is visibly marked as best-within-time-limit, not proven optimal)
  * - infeasible → the conflicting constraints mapped back to spec fields, with
@@ -36,7 +36,7 @@ const SolveRender = memo<BuiltinRenderProps<SolveParams, SolveState>>(
             {pluginState.status === 'feasible_timeout' && (
               <Alert
                 type={'info'}
-                title={t('builtins.lobe-solver.render.feasibleTimeoutNotice', {
+                title={t('builtins.builtin-solver.render.feasibleTimeoutNotice', {
                   ms: pluginState.solverMeta?.timeLimitMs,
                 })}
               />
@@ -52,7 +52,7 @@ const SolveRender = memo<BuiltinRenderProps<SolveParams, SolveState>>(
       case 'infeasible': {
         return (
           <Flexbox gap={8} style={{ paddingBlock: 4 }}>
-            <Alert title={t('builtins.lobe-solver.render.infeasibleTitle')} type={'warning'} />
+            <Alert title={t('builtins.builtin-solver.render.infeasibleTitle')} type={'warning'} />
             <InfeasibleResult conflicts={pluginState.conflicts ?? []} />
           </Flexbox>
         );
@@ -62,7 +62,7 @@ const SolveRender = memo<BuiltinRenderProps<SolveParams, SolveState>>(
           <Flexbox style={{ paddingBlock: 4 }}>
             <Alert
               extra={pluginState.error}
-              title={t('builtins.lobe-solver.render.errorTitle')}
+              title={t('builtins.builtin-solver.render.errorTitle')}
               type={'error'}
             />
           </Flexbox>

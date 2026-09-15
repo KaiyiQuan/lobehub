@@ -41,7 +41,7 @@ export const InfeasibleResult = memo<{ conflicts: SolverConflict[] }>(({ conflic
           {conflict.suggestedRelaxations && conflict.suggestedRelaxations.length > 0 && (
             <Flexbox gap={2}>
               <Text as={'span'} className={styles.detail} style={{ fontWeight: 500 }}>
-                {t('builtins.lobe-solver.render.suggestedRelaxations')}:
+                {t('builtins.builtin-solver.render.suggestedRelaxations')}:
               </Text>
               {conflict.suggestedRelaxations.map((suggestion) => (
                 <Text className={styles.detail} key={suggestion}>

@@ -9,7 +9,7 @@ import { toolsEnv } from '@/envs/tools';
 import { type ServerRuntimeRegistration } from './types';
 
 /**
- * Server runtime for the lobe-solver builtin tool: executes against the
+ * Server runtime for the builtin-solver builtin tool: executes against the
  * deployed solver service (apps/solver-service) over HTTP with bearer auth.
  *
  * The tool is only offered to agents when both env vars are set — the gate

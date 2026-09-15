@@ -59,9 +59,9 @@ interface CandidateCardProps {
 }
 
 const COST_LABEL_KEYS = {
-  accommodation: 'builtins.lobe-solver.render.cost.accommodation',
-  meals: 'builtins.lobe-solver.render.cost.meals',
-  transportation: 'builtins.lobe-solver.render.cost.transportation',
+  accommodation: 'builtins.builtin-solver.render.cost.accommodation',
+  meals: 'builtins.builtin-solver.render.cost.meals',
+  transportation: 'builtins.builtin-solver.render.cost.transportation',
 } as const;
 
 const CandidateCard = memo<CandidateCardProps>(({ candidate, index, spec, showTimeoutBadge }) => {
@@ -106,7 +106,7 @@ const CandidateCard = memo<CandidateCardProps>(({ candidate, index, spec, showTi
   return (
     <Flexbox gap={6}>
       <Flexbox horizontal align={'center'} gap={8} wrap={'wrap'}>
-        <Tag>{t('builtins.lobe-solver.render.candidate', { index: index + 1 })}</Tag>
+        <Tag>{t('builtins.builtin-solver.render.candidate', { index: index + 1 })}</Tag>
         {typeof totalCost === 'number' && (
           <Text style={{ fontWeight: 500 }}>{formatCost(totalCost)}</Text>
         )}
@@ -114,12 +114,12 @@ const CandidateCard = memo<CandidateCardProps>(({ candidate, index, spec, showTi
           <Text as={'span'} className={styles.label}>
             / {formatCost(budget)}{' '}
             {withinBudget
-              ? t('builtins.lobe-solver.render.withinBudget')
-              : t('builtins.lobe-solver.render.overBudget')}
+              ? t('builtins.builtin-solver.render.withinBudget')
+              : t('builtins.builtin-solver.render.overBudget')}
           </Text>
         )}
         {showTimeoutBadge && (
-          <Tag color={'warning'}>{t('builtins.lobe-solver.render.timeoutBadge')}</Tag>
+          <Tag color={'warning'}>{t('builtins.builtin-solver.render.timeoutBadge')}</Tag>
         )}
       </Flexbox>
 
@@ -127,18 +127,18 @@ const CandidateCard = memo<CandidateCardProps>(({ candidate, index, spec, showTi
         <Flexbox gap={2}>
           {origin && cities.length > 0 && (
             <Text className={styles.label}>
-              {t('builtins.lobe-solver.render.route')}: {[origin, ...cities, origin].join(' → ')} ·{' '}
-              {t('builtins.lobe-solver.render.days', { count: plan.length })}
+              {t('builtins.builtin-solver.render.route')}: {[origin, ...cities, origin].join(' → ')}{' '}
+              · {t('builtins.builtin-solver.render.days', { count: plan.length })}
             </Text>
           )}
           {transports.length > 0 && (
             <Text className={styles.label}>
-              {t('builtins.lobe-solver.render.transport')}: {transports.join(', ')}
+              {t('builtins.builtin-solver.render.transport')}: {transports.join(', ')}
             </Text>
           )}
           {stays.length > 0 && (
             <Text className={styles.label}>
-              {t('builtins.lobe-solver.render.stay')}: {stays.join(' · ')}
+              {t('builtins.builtin-solver.render.stay')}: {stays.join(' · ')}
             </Text>
           )}
         </Flexbox>
@@ -162,7 +162,7 @@ const CandidateCard = memo<CandidateCardProps>(({ candidate, index, spec, showTi
       {satisfied.length > 0 && (
         <Flexbox horizontal align={'center'} gap={4} wrap={'wrap'}>
           <Text as={'span'} className={styles.label}>
-            {t('builtins.lobe-solver.render.satisfiedConstraints')}:
+            {t('builtins.builtin-solver.render.satisfiedConstraints')}:
           </Text>
           {satisfied.map((item) => (
             <Tag key={item} style={{ marginInlineEnd: 0 }}>
@@ -179,18 +179,18 @@ const CandidateCard = memo<CandidateCardProps>(({ candidate, index, spec, showTi
             role={'button'}
             onClick={() => setShowItinerary((v) => !v)}
           >
-            {showItinerary ? '▾' : '▸'} {t('builtins.lobe-solver.render.itinerary')}
+            {showItinerary ? '▾' : '▸'} {t('builtins.builtin-solver.render.itinerary')}
           </span>
           {showItinerary && (
             <Flexbox gap={2}>
               {plan.map((day) => (
                 <Text className={styles.day} key={day.days}>
-                  {t('builtins.lobe-solver.render.day', { day: day.days })} — {day.current_city}
+                  {t('builtins.builtin-solver.render.day', { day: day.days })} — {day.current_city}
                   {day.transportation && day.transportation !== '-'
                     ? ` · ${day.transportation}`
                     : ''}
                   {day.accommodation && day.accommodation !== '-'
-                    ? ` · ${t('builtins.lobe-solver.render.stay')}: ${day.accommodation}`
+                    ? ` · ${t('builtins.builtin-solver.render.stay')}: ${day.accommodation}`
                     : ''}
                 </Text>
               ))}

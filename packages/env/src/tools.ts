@@ -79,7 +79,7 @@ export const getToolsConfig = () => {
       SEARXNG_URL: z.string().url().optional(),
       /**
        * Constraint-solver service (apps/solver-service) connection for the
-       * `lobe-solver` builtin tool. Both must be set for the tool to be
+       * `builtin-solver` builtin tool. Both must be set for the tool to be
        * offered to agents; server-only, never exposed to the client (the
        * client sees only the `enableSolverService` flag in the server config).
        */

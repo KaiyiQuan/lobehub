@@ -1,4 +1,4 @@
-export const SolverIdentifier = 'lobe-solver';
+export const SolverIdentifier = 'builtin-solver';
 
 export const SolverApiName = {
   solve: 'solve',

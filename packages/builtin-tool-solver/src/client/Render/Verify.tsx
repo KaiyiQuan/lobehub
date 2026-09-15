@@ -45,8 +45,8 @@ const VerifyRender = memo<BuiltinRenderProps<VerifyParams, VerifyState>>(
           type={pass ? 'success' : 'error'}
           title={
             pass
-              ? t('builtins.lobe-solver.render.verifyPass', { passed, total })
-              : t('builtins.lobe-solver.render.verifyFail', { failed: total - passed, total })
+              ? t('builtins.builtin-solver.render.verifyPass', { passed, total })
+              : t('builtins.builtin-solver.render.verifyFail', { failed: total - passed, total })
           }
         />
         <Flexbox gap={4}>

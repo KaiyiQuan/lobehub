@@ -1,5 +1,5 @@
 /**
- * System prompt for the lobe-solver tool.
+ * System prompt for the builtin-solver tool.
  *
  * Design notes (grounded in the formulation experiment that shaped the service):
  * - The experiment's only typed-spec failures were EXTRACTION errors (budget and
@@ -13,7 +13,7 @@
  *   discovery). Keep each pack doc self-contained so adding a pack means adding
  *   one block here.
  */
-export const systemPrompt = `You have access to **lobe-solver**, a constraint-solver service. It turns a natural-language request with hard constraints (budget, dates, capacity, compatibility) into an exact solution instead of an improvised one. Prefer it over mental arithmetic whenever the user states hard constraints and expects a plan that provably satisfies them.
+export const systemPrompt = `You have access to **builtin-solver**, a constraint-solver service. It turns a natural-language request with hard constraints (budget, dates, capacity, compatibility) into an exact solution instead of an improvised one. Prefer it over mental arithmetic whenever the user states hard constraints and expects a plan that provably satisfies them.
 
 APIs:
 - **solve**: Formalize the request into the pack's typed spec and solve it. Returns one of four statuses (see below).

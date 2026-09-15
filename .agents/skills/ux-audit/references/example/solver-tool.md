@@ -1,6 +1,6 @@
 # Worked example — Constraint Solver 方案卡（chat 内 builtin tool Render / Inspector）surface audit
 
-审计对象是 `lobe-solver` builtin tool 在聊天里的呈现，包括 Inspector 一行摘要、solve 结果卡（可行 / 限时 / 不可行 / 规格错误）和 verify 校验卡。日期 2026-09-16。
+审计对象是 `builtin-solver` builtin tool 在聊天里的呈现，包括 Inspector 一行摘要、solve 结果卡（可行 / 限时 / 不可行 / 规格错误）和 verify 校验卡。日期 2026-09-16。
 
 **前提（用户拍板，是约束，不在评审范围内）：卡片就是方案本身，不是证据。** 求解得到的行程方案是这次对话交付给用户的产物，卡片必须完整承载它；模型的文字回答负责解释取舍和理由，不再复述行程。本审计的第一版以「证据还是方案」二选一来评估，已按这个前提整体重做。
 

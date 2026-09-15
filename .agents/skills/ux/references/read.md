@@ -553,3 +553,24 @@ material, not as the page.
 - [ ] An embedded document folds to a **titled row** (first meaningful line as label) that expands to full text — no first-N-px cropped preview with a fade. _(Natural)_
 - [ ] Quoted/embedded content is visually subordinated: a quiet container + capped heading scale, never sharing the host page's typographic hierarchy. _(Meaningful)_
 - [ ] A mask/fade helper's `size` unit is verified against its implementation (px vs %) before shipping — a wrong unit blanks real content. _(Certainty)_
+
+## 1.14 An agent tool's result card is evidence with a job, not a second answer・Meaningful・Certainty
+
+In a chat, the assistant's reply **is** the answer; a builtin tool's Render card sits in the same stream and competes with it. A card with no stated job becomes a smaller, greyer copy of what the model is about to write anyway — the user reads the result twice, and the better version comes second. Decide the card's job before designing it: either it is **evidence** (collapsed by default to a self-sufficient one-line summary; expanded, it shows only what the prose cannot — what the agent understood, how strong the guarantee is, how the options differ), or it is **the artifact** (a structured view the prose then refers to instead of restating). Never both.
+
+Three consequences follow for any tool whose output the user must trust:
+
+1. **Show what the agent understood when extraction is the failure mode.** If the tool is only as right as the agent's reading of the request (a formalized spec, parsed filters, a generated query), the card must surface that reading in human terms and make it correctable. A card that shows only a derived subset under a "satisfied" label vouches for a wrong reading — the exact failure the user most needs to catch.
+2. **Fold the check into the thing it checks.** A verification step is a trust signal about a result, not a peer result. Render it as a badge on that result ("verified 13/13 ✓") with failures expanded, not as a separate card listing every passing row.
+3. **Label the guarantee honestly.** Distinguish proven from best-effort outcomes in both the one-line summary and the card; a time-limited or partial result must never read as optimal/complete.
+
+> ✅ **Constraint solver** marks `feasible_timeout` as its own state — an info alert ("best within the time limit, optimality not proven"), a per-candidate time-limited badge, and a distinct Inspector status (`builtin-tool-solver` `Render/Solve/index.tsx:36-43`, `CandidateList.tsx:121-123`) — and its Inspector line alone reads as the outcome ("最优解 ($306)", "不可行 (1 个冲突)", "通过 (13/13)").
+> ❌ The same tool's solve card lists route /stay/cost in 12px grey text that the model's markdown reply immediately repeats in a better layout; "满足的约束" shows a spec-derived subset (`CandidateList.tsx:97-104`) so a mis-extracted request still reads as satisfied; and verify renders as a separate card with all 13 passing snake\_case rows (`Render/Verify.tsx:52-71`). See `ux-audit/references/example/solver-tool.md`.
+
+**Checklist**
+
+- [ ] The tool card has one stated job — collapsed evidence or the primary artifact — and does not restate what the assistant's reply says. _(Meaningful)_
+- [ ] Collapsed, the tool step's one-line summary is self-sufficient: outcome + the key number (cost, count, pass ratio). _(Natural)_
+- [ ] When correctness depends on the agent's reading of the request, the card shows that reading in human terms (hard vs soft, every extracted field) with a way to correct it; "satisfied" is claimed only for independently checked items. _(Certainty)_
+- [ ] A verification of a result is a badge on that result with failures expanded, not a separate card listing every passing check. _(Natural)_
+- [ ] Proven vs best-effort / time-limited / partial outcomes are labeled distinctly in both the summary line and the card. _(Certainty)_

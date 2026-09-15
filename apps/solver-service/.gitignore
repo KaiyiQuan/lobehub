@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# Reference data is fetched at build/dev time by scripts/fetch_data.py
+# (sha256-pinned); only the small committed background file ships in git.
+data/*_ref_info.jsonl

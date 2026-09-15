@@ -1,0 +1,8 @@
+# Runtime dependencies (fully pinned). Python 3.9+ (Docker image uses 3.12).
+# ortools is the CP-SAT engine; jsonschema validates ConstraintSpec against
+# spec.schema.json. z3-solver is deliberately NOT a dependency: nothing in the
+# service imports it (single-engine decision, see packs/travelplanner/solve.py).
+ortools==9.15.6755
+jsonschema==4.25.1
+fastapi==0.128.8
+uvicorn==0.39.0

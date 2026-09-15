@@ -2,8 +2,7 @@
 
 import { LoadingOutlined } from '@ant-design/icons';
 import { Block, Center } from '@lobehub/ui';
-import { Spin } from '@lobehub/ui/base-ui';
-import { Progress } from 'antd';
+import { Progress, Spin } from '@lobehub/ui/base-ui';
 import { memo, useEffect, useState } from 'react';
 
 import { ElapsedTime } from '@/routes/(main)/(create)/image/features/GenerationFeed/GenerationItem/ElapsedTime';

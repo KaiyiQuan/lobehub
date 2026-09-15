@@ -1,19 +1,8 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://lobehub.com/schemas/travel-planner-constraint-spec.json",
-  "title": "ConstraintSpec",
-  "description": "Hard constraints (plus optional soft preferences) for one TravelPlanner query. An LLM emits this from the natural-language query alone; the solver combines it with the query's reference_information to produce plans.",
-  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
-  "required": [
-    "origin",
-    "destination",
-    "days",
-    "startDate",
-    "visitingCityNumber",
-    "peopleNumber",
-    "budget"
-  ],
+  "description": "Hard constraints (plus optional soft preferences) for one TravelPlanner query. An LLM emits this from the natural-language query alone; the solver combines it with the query's reference_information to produce plans.",
   "properties": {
     "origin": {
       "type": "string",
@@ -103,5 +92,16 @@
         }
       }
     }
-  }
+  },
+  "required": [
+    "origin",
+    "destination",
+    "days",
+    "startDate",
+    "visitingCityNumber",
+    "peopleNumber",
+    "budget"
+  ],
+  "title": "ConstraintSpec",
+  "type": "object"
 }

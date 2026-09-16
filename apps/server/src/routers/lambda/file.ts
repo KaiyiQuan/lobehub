@@ -73,6 +73,15 @@ const assertAllFilesAccessible = (requestedIds: string[], files: Array<{ id: str
   }
 };
 
+/** Agent-share provenance is assigned only by the share upload endpoint. */
+const withoutAgentShareProvenance = (metadata: unknown): unknown => {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return metadata;
+
+  return Object.fromEntries(
+    Object.entries(metadata as Record<string, unknown>).filter(([key]) => key !== 'agentShare'),
+  );
+};
+
 const resolveAccessibleParentDocument = async (
   ctx: KnowledgeBaseAccessCtx & {
     documentModel: Pick<DocumentModel, 'findById' | 'findBySlug'>;
@@ -231,6 +240,7 @@ export const fileRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      const metadata = withoutAgentShareProvenance(input.metadata);
       const existingFile = await ctx.fileModel.checkHash(input.hash!);
       const { isExist } = existingFile;
       const latestUpload = await ctx.fileUploadService.findLatest(input.url);
@@ -285,7 +295,7 @@ export const fileRouter = router({
           (settledFile.source ?? undefined) === toFileSource(input.source) &&
           settledFile.url === input.url &&
           (!ctx.workspaceId || settledFile.visibility === resolvedVisibility) &&
-          isEqual(settledFile.metadata, input.metadata ?? null);
+          isEqual(settledFile.metadata, metadata ?? null);
 
         if (isRetry) {
           return {
@@ -367,7 +377,7 @@ export const fileRouter = router({
           await ctx.fileModel.updateGlobalFile(
             input.hash!,
             {
-              metadata: input.metadata,
+              metadata,
               url: input.url,
             },
             trx,
@@ -380,7 +390,7 @@ export const fileRouter = router({
               fileHash: input.hash,
               fileType: input.fileType,
               knowledgeBaseId: input.knowledgeBaseId,
-              metadata: input.metadata,
+              metadata,
               name: input.name,
               parentId: resolvedParentId,
               size: actualSize,
@@ -986,7 +996,7 @@ export const fileRouter = router({
       const updates: Parameters<typeof ctx.fileModel.update>[1] = {};
 
       if (metadata !== undefined) {
-        updates.metadata = metadata;
+        updates.metadata = withoutAgentShareProvenance(metadata);
       }
 
       if (name !== undefined) {

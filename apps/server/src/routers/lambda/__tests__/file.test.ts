@@ -515,6 +515,29 @@ describe('fileRouter', () => {
       });
     });
 
+    it('should strip forged agent-share provenance from an ordinary upload', async () => {
+      mockFileModelCheckHash.mockResolvedValue({ isExist: false });
+      mockFileModelCreate.mockResolvedValue({ id: 'new-file-id' });
+
+      await caller.createFile({
+        fileType: 'image/png',
+        hash: 'test-hash',
+        metadata: {
+          agentShare: { shareId: 'share-1', visitorUserId: 'visitor-1' },
+          width: 100,
+        },
+        name: 'cat.png',
+        size: 100,
+        url: 'files/cat.png',
+      });
+
+      expect(mockFileModelCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ metadata: { width: 100 } }),
+        true,
+        routerMocks.transactionClient,
+      );
+    });
+
     it('should persist a known upload source so the origin filter can see it', async () => {
       mockFileModelCheckHash.mockResolvedValue({ isExist: false });
       mockFileModelCreate.mockResolvedValue({ id: 'new-file-id' });
@@ -1304,6 +1327,20 @@ describe('fileRouter', () => {
       await caller.updateFile({ id: 'file-1', parentId: 'parent-folder' });
 
       expect(mockFileModelUpdate).toHaveBeenCalledWith('file-1', { parentId: 'docs_parent' });
+    });
+
+    it('should strip forged agent-share provenance from metadata updates', async () => {
+      mockFileModelFindById.mockResolvedValue({ id: 'file-1', userId: 'test-user' });
+
+      await caller.updateFile({
+        id: 'file-1',
+        metadata: {
+          agentShare: { shareId: 'share-1', visitorUserId: 'visitor-1' },
+          width: 100,
+        },
+      });
+
+      expect(mockFileModelUpdate).toHaveBeenCalledWith('file-1', { metadata: { width: 100 } });
     });
   });
 

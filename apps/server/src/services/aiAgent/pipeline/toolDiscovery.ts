@@ -632,7 +632,13 @@ export const discoverTools = async (
     let attachedFileTypes: string[] = [];
     if (attachedFileIds && attachedFileIds.length > 0) {
       const fileModel = new FileModel(deps.db, deps.userId, deps.workspaceId);
-      const fileRecords = await fileModel.findByIds(Array.from(new Set(attachedFileIds)));
+      const uniqueFileIds = Array.from(new Set(attachedFileIds));
+      const fileRecords = shareGate
+        ? await fileModel.findAgentShareFilesByIds(uniqueFileIds, {
+            shareId: shareGate.shareId,
+            visitorUserId: shareGate.visitorUserId,
+          })
+        : await fileModel.findByIds(uniqueFileIds);
       attachedFileTypes = fileRecords.map((file) => file.fileType || '');
     }
     const inputFileTypes = [...externalFileTypes, ...attachedFileTypes];

@@ -376,6 +376,48 @@ describe('DocumentModel', () => {
   });
 
   describe('findById', () => {
+    it('hides a document derived from an agent-share file from ordinary document reads', async () => {
+      const { id: fileId } = await fileModel.create({
+        fileType: 'application/pdf',
+        metadata: { agentShare: { shareId: 'share-a', visitorUserId: 'visitor-a' } },
+        name: 'visitor.pdf',
+        size: 100,
+        url: 'files/user/agent-share/share-a/visitor.pdf',
+      });
+      const { id: documentId, slug } = await documentModel.create({
+        content: 'private visitor content',
+        fileId,
+        fileType: 'custom/document',
+        filename: 'visitor',
+        source: 'files/user/agent-share/share-a/visitor.pdf',
+        sourceType: 'file',
+        title: 'Visitor document',
+        totalCharCount: 23,
+        totalLineCount: 1,
+      });
+
+      await expect(documentModel.query({ sourceTypes: ['file'] })).resolves.toMatchObject({
+        items: [],
+        total: 0,
+      });
+      await expect(documentModel.findById(documentId)).resolves.toBeUndefined();
+      await expect(documentModel.findByIds([documentId])).resolves.toEqual([]);
+      await expect(documentModel.findByFileId(fileId)).resolves.toBeUndefined();
+      await expect(documentModel.findBySlug(slug!)).resolves.toBeUndefined();
+      await expect(
+        documentModel.findAgentShareDocumentByFileId(fileId, {
+          shareId: 'share-a',
+          visitorUserId: 'visitor-a',
+        }),
+      ).resolves.toMatchObject({ id: documentId });
+      await expect(
+        documentModel.findAgentShareDocumentByFileId(fileId, {
+          shareId: 'share-a',
+          visitorUserId: 'visitor-b',
+        }),
+      ).resolves.toBeUndefined();
+    });
+
     it('should find document by id', async () => {
       const { documentId } = await createTestDocument(documentModel, fileModel, 'Test content');
 

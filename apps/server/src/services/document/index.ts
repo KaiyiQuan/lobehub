@@ -5,6 +5,7 @@ import { type LobeChatDatabase } from '@lobechat/database';
 import { type DocumentItem } from '@lobechat/database/schemas';
 import { documents, files } from '@lobechat/database/schemas';
 import { loadFile, UnsupportedFileTypeError } from '@lobechat/file-loaders';
+import type { AgentShareFileProvenance } from '@lobechat/types';
 import { TRPCError } from '@trpc/server';
 import debug from 'debug';
 import { and, eq, sql } from 'drizzle-orm';
@@ -847,12 +848,16 @@ export class DocumentService {
    * transaction scoped, so a nested call would hold it until the outer
    * transaction commits instead of releasing it after the insert.
    */
-  async parseFile(fileId: string): Promise<LobeDocument> {
+  async parseFile(fileId: string, agentShare?: AgentShareFileProvenance): Promise<LobeDocument> {
     // Idempotent: return existing document if already parsed
-    const existingDoc = await this.documentModel.findByFileId(fileId);
+    const existingDoc = agentShare
+      ? await this.documentModel.findAgentShareDocumentByFileId(fileId, agentShare)
+      : await this.documentModel.findByFileId(fileId);
     if (existingDoc) return existingDoc as LobeDocument;
 
-    const { filePath, file, cleanup } = await this.fileService.downloadFileToLocal(fileId);
+    const { filePath, file, cleanup } = agentShare
+      ? await this.fileService.downloadFileToLocal(fileId, agentShare)
+      : await this.fileService.downloadFileToLocal(fileId);
 
     const logPrefix = `[${file.name}]`;
     log(`${logPrefix} Starting to parse file, path: ${filePath}`);
@@ -897,7 +902,9 @@ export class DocumentService {
 
         // Whoever inserted first wins; discard this parse rather than adding a
         // second document for the same file.
-        const raced = await transactionDocumentModel.findByFileId(fileId);
+        const raced = agentShare
+          ? await transactionDocumentModel.findAgentShareDocumentByFileId(fileId, agentShare)
+          : await transactionDocumentModel.findByFileId(fileId);
         if (raced) return raced;
 
         return transactionDocumentModel.create({

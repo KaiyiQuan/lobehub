@@ -143,10 +143,12 @@ export const resolveNewTopicSnapshot = async (
 const resolveRunAttachments = async (
   deps: TurnSetupDeps,
   {
+    agentShare,
     attachedFileIds,
     files,
     throwIfAborted,
   }: {
+    agentShare?: Pick<AgentShareGate, 'shareId' | 'visitorUserId'>;
     attachedFileIds?: string[];
     files?: InternalExecAgentParams['files'];
     throwIfAborted: (stage: string) => Promise<void>;
@@ -269,6 +271,7 @@ const resolveRunAttachments = async (
 
     try {
       const resolved = await resolveAttachmentsByFileIds({
+        agentShare,
         db: deps.db,
         fileIds: attachedFileIds,
         userId: deps.userId,
@@ -661,6 +664,9 @@ export const setupTurn = async (
   // Attachment ingestion: raw bot/IM `files` → S3, pre-uploaded
   // `attachedFileIds` → signed URLs + classification.
   const runAttachments = await resolveRunAttachments(deps, {
+    agentShare: shareGate
+      ? { shareId: shareGate.shareId, visitorUserId: shareGate.visitorUserId }
+      : undefined,
     attachedFileIds,
     files,
     throwIfAborted: throwIfExecutionAborted,

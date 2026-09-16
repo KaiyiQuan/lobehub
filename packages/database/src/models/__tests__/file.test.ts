@@ -352,33 +352,72 @@ describe('FileModel', () => {
       ).resolves.toBeDefined();
     });
 
-    it('returns a hashless row only with exclusiveStorage, so its object can be deleted', async () => {
-      const create = () =>
-        fileModel.create(
-          { fileType: 'image/png', name: 'cat.png', size: 10, url: 'files/u/share/a/cat.png' },
-          false,
-        );
-
-      // Default: no hash means no global-file bookkeeping, and the caller gets
-      // nothing back even though the row is gone.
-      const { id: silent } = await create();
+    it('derives hashless agent-share object ownership from persisted provenance', async () => {
+      const { id: silent } = await fileModel.create(
+        { fileType: 'image/png', name: 'cat.png', size: 10, url: 'files/u/plain/cat.png' },
+        false,
+      );
       await expect(fileModel.deleteUnreferenced(silent)).resolves.toBeUndefined();
       await expect(
         serverDB.query.files.findFirst({ where: eq(files.id, silent) }),
       ).resolves.toBeUndefined();
 
-      // exclusiveStorage: the row is the only owner of its object, so it is
-      // returned whenever it was deleted.
-      const { id } = await create();
+      const { id } = await fileModel.create(
+        {
+          fileType: 'image/png',
+          metadata: { agentShare: { shareId: 'share-a', visitorUserId: 'visitor-a' } },
+          name: 'cat.png',
+          size: 10,
+          url: 'files/u/share/a/cat.png',
+        },
+        false,
+      );
+      await expect(fileModel.deleteUnreferenced(id)).resolves.toBeUndefined();
       await expect(
-        fileModel.deleteUnreferenced(id, true, { exclusiveStorage: true }),
-      ).resolves.toMatchObject({ id, url: 'files/u/share/a/cat.png' });
+        serverDB.query.files.findFirst({ where: eq(files.id, id) }),
+      ).resolves.toBeDefined();
+      await expect(
+        fileModel.deleteAgentShareUnreferenced(id, {
+          shareId: 'share-a',
+          visitorUserId: 'visitor-b',
+        }),
+      ).resolves.toBeUndefined();
+      await expect(
+        fileModel.deleteAgentShareUnreferenced(id, {
+          shareId: 'share-a',
+          visitorUserId: 'visitor-a',
+        }),
+      ).resolves.toMatchObject({
+        id,
+        url: 'files/u/share/a/cat.png',
+      });
       await expect(
         serverDB.query.files.findFirst({ where: eq(files.id, id) }),
       ).resolves.toBeUndefined();
+
+      const { id: removalDisabled } = await fileModel.create(
+        {
+          fileType: 'image/png',
+          metadata: { agentShare: { shareId: 'share-a', visitorUserId: 'visitor-a' } },
+          name: 'dog.png',
+          size: 10,
+          url: 'files/u/share/a/dog.png',
+        },
+        false,
+      );
+      await expect(
+        fileModel.deleteAgentShareUnreferenced(
+          removalDisabled,
+          { shareId: 'share-a', visitorUserId: 'visitor-a' },
+          false,
+        ),
+      ).resolves.toBeUndefined();
+      await expect(
+        serverDB.query.files.findFirst({ where: eq(files.id, removalDisabled) }),
+      ).resolves.toBeUndefined();
     });
 
-    it('returns a hashed row with exclusiveStorage even while another row shares the hash', async () => {
+    it('keeps hashed rows on the global reference-count path even with share provenance', async () => {
       await fileModel.createGlobalFile({
         creator: userId,
         fileType: 'image/png',
@@ -396,27 +435,23 @@ describe('FileModel', () => {
       const { id } = await fileModel.create({
         fileHash: 'shared-hash',
         fileType: 'image/png',
+        metadata: { agentShare: { shareId: 'share-a', visitorUserId: 'visitor-a' } },
         name: 'second.png',
         size: 10,
         url: 'files/u/second.png',
       });
 
-      await expect(fileModel.deleteUnreferenced(id, true)).resolves.toBeUndefined();
+      await expect(
+        fileModel.deleteAgentShareUnreferenced(
+          id,
+          { shareId: 'share-a', visitorUserId: 'visitor-a' },
+          true,
+        ),
+      ).resolves.toBeUndefined();
       await expect(
         serverDB.query.files.findFirst({ where: eq(files.id, id) }),
       ).resolves.toBeUndefined();
 
-      const { id: again } = await fileModel.create({
-        fileHash: 'shared-hash',
-        fileType: 'image/png',
-        name: 'third.png',
-        size: 10,
-        url: 'files/u/third.png',
-      });
-      await expect(
-        fileModel.deleteUnreferenced(again, true, { exclusiveStorage: true }),
-      ).resolves.toMatchObject({ id: again, url: 'files/u/third.png' });
-      // The shared global entry survives: the keeper still references it.
       await expect(
         serverDB.query.files.findFirst({ where: eq(files.id, keeper) }),
       ).resolves.toBeDefined();
@@ -876,6 +911,15 @@ describe('FileModel', () => {
             url: 'acceptance-url',
           },
           {
+            id: 'agent-share-file',
+            name: 'visitor.txt',
+            userId,
+            fileType: 'text/plain',
+            metadata: { agentShare: { shareId: 'share-a', visitorUserId: 'visitor-a' } },
+            size: 100,
+            url: 'visitor-url',
+          },
+          {
             id: 'generation-file',
             name: 'generated.png',
             userId,
@@ -887,7 +931,7 @@ describe('FileModel', () => {
         ]);
       });
 
-      it('should exclude acceptance evidence and keep every other source', async () => {
+      it('should exclude acceptance evidence and agent-share provenance', async () => {
         const result = await fileModel.query();
 
         expect(result.map((f) => f.id).sort()).toEqual(['generation-file', 'plain-file']);
@@ -902,21 +946,19 @@ describe('FileModel', () => {
   });
 
   describe('countAgentShareUsage', () => {
-    it("sums only this user's agent_share files that belong to the given share", async () => {
+    it("sums only this user's files with provenance for the given share", async () => {
       const base = { fileType: 'text/plain', url: 'https://example.com/f' };
       const visitorFile = (shareId: string, size: number) => ({
         ...base,
         metadata: { agentShare: { shareId, visitorUserId: 'visitor' } },
         name: `${shareId}-${size}`,
         size,
-        source: FileSource.AgentShare,
       });
 
       await fileModel.create(visitorFile('share-a', 10));
       await fileModel.create(visitorFile('share-a', 20));
       await fileModel.create(visitorFile('share-b', 40));
-      // Same provenance shape on a plain library upload: not a visitor file.
-      await fileModel.create({ ...visitorFile('share-a', 80), source: undefined });
+      await fileModel.create({ ...base, name: 'ordinary', size: 80 });
       // Another user's visitor file on the same share id.
       await new FileModel(serverDB, 'user2').create(visitorFile('share-a', 160));
 
@@ -944,6 +986,31 @@ describe('FileModel', () => {
         fileType: 'text/plain',
         userId,
       });
+    });
+
+    it('hides share-provenance files from ordinary reads and resolves them through the scoped API', async () => {
+      const { id } = await fileModel.create({
+        fileType: 'text/plain',
+        metadata: { agentShare: { shareId: 'share-a', visitorUserId: 'visitor-a' } },
+        name: 'visitor.txt',
+        size: 100,
+        url: 'https://example.com/visitor.txt',
+      });
+
+      await expect(fileModel.findById(id)).resolves.toBeUndefined();
+      await expect(fileModel.findByIds([id])).resolves.toEqual([]);
+      await expect(
+        fileModel.findAgentShareFileById(id, {
+          shareId: 'share-a',
+          visitorUserId: 'visitor-a',
+        }),
+      ).resolves.toMatchObject({ id });
+      await expect(
+        fileModel.findAgentShareFileById(id, {
+          shareId: 'share-a',
+          visitorUserId: 'visitor-b',
+        }),
+      ).resolves.toBeUndefined();
     });
   });
 

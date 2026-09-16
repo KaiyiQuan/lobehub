@@ -1,5 +1,5 @@
-import type { QueryFileListParams } from '@lobechat/types';
-import { FileSource, FilesTabs, LIBRARY_HIDDEN_FILE_SOURCES, SortType } from '@lobechat/types';
+import type { AgentShareFileProvenance, QueryFileListParams } from '@lobechat/types';
+import { FilesTabs, getAgentShareFileProvenance, SortType } from '@lobechat/types';
 import {
   and,
   asc,
@@ -12,7 +12,6 @@ import {
   like,
   ne,
   notExists,
-  notInArray,
   or,
   sql,
   sum,
@@ -38,6 +37,7 @@ import {
 } from '../schemas';
 import type { LobeChatDatabase, Transaction } from '../type';
 import { buildFileCategoryFilter } from '../utils/fileTypeCategory';
+import { libraryVisibleFile, notAgentShareFile } from '../utils/fileVisibility';
 import { buildWorkspacePayload, buildWorkspaceWhere } from '../utils/workspace';
 
 /**
@@ -167,78 +167,77 @@ export class FileModel {
     };
   };
 
-  /**
-   * Delete a file row. Returns the row only when the caller should also
-   * remove the stored object: by default that is when the row's `fileHash`
-   * was the last reference to its `global_files` entry (content-deduplicated
-   * uploads share one object per hash). A row created outside that dedup
-   * graph (`insertToGlobalFiles: false`, no `fileHash`, its own object under
-   * `url`) is never counted there, so pass `exclusiveStorage: true` to get the
-   * row back whenever it was deleted — otherwise its object is orphaned.
-   */
-  delete = async (
+  private deleteInTransaction = async (
     id: string,
-    removeGlobalFile: boolean = true,
-    trx?: Transaction,
-    options?: { exclusiveStorage?: boolean },
+    removeGlobalFile: boolean,
+    tx: Transaction,
+    includeAgentShare: boolean,
   ) => {
-    const executeInTransaction = async (tx: Transaction) => {
-      // In pglite environment, non-transactional operations cannot be used within a transaction as it will block
-      const file = await this.findById(id, tx);
-      if (!file) return;
+    // In pglite environment, non-transactional operations cannot be used within a transaction as it will block
+    const file = includeAgentShare
+      ? await this.findByIdIncludingAgentShare(id, tx)
+      : await this.findById(id, tx);
+    if (!file) return;
 
-      const fileHash = file.fileHash;
+    const fileHash = file.fileHash;
 
-      // 1. Delete related chunks
-      await this.deleteFileChunks(tx as any, [id]);
+    // 1. Delete related chunks
+    await this.deleteFileChunks(tx as any, [id]);
 
-      // 2. Delete mirror documents whose source is this file. Without this,
-      // documents.fileId would be set null by FK and leave orphan rows behind
-      // (still indexed by BM25, still occupying KB slots).
-      await tx
-        .delete(documents)
-        .where(
-          and(
-            eq(documents.fileId, id),
-            buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, documents),
-            eq(documents.sourceType, 'file'),
-          ),
-        );
-
-      // 3. Delete the chunk/embedding asyncTasks tied to this file. files.chunkTaskId
-      // and embeddingTaskId are `set null` on the asyncTasks side, so without this
-      // the task rows would dangle in the DB forever.
-      const taskIds = [file.chunkTaskId, file.embeddingTaskId].filter((taskId): taskId is string =>
-        Boolean(taskId),
+    // 2. Delete mirror documents whose source is this file. Without this,
+    // documents.fileId would be set null by FK and leave orphan rows behind
+    // (still indexed by BM25, still occupying KB slots).
+    await tx
+      .delete(documents)
+      .where(
+        and(
+          eq(documents.fileId, id),
+          buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, documents),
+          eq(documents.sourceType, 'file'),
+        ),
       );
-      if (taskIds.length > 0) {
-        await tx.delete(asyncTasks).where(inArray(asyncTasks.id, taskIds));
-      }
 
-      // 4. Delete file record
-      await tx.delete(files).where(and(eq(files.id, id), this.ownership()));
+    // 3. Delete the chunk/embedding asyncTasks tied to this file. files.chunkTaskId
+    // and embeddingTaskId are `set null` on the asyncTasks side, so without this
+    // the task rows would dangle in the DB forever.
+    const taskIds = [file.chunkTaskId, file.embeddingTaskId].filter((taskId): taskId is string =>
+      Boolean(taskId),
+    );
+    if (taskIds.length > 0) {
+      await tx.delete(asyncTasks).where(inArray(asyncTasks.id, taskIds));
+    }
 
-      if (!fileHash) return options?.exclusiveStorage ? file : undefined;
+    // 4. Delete file record
+    await tx.delete(files).where(and(eq(files.id, id), this.ownership()));
 
-      const result = await tx
-        .select({ count: count() })
-        .from(files)
-        .where(eq(files.fileHash, fileHash));
+    if (!fileHash) {
+      return removeGlobalFile && getAgentShareFileProvenance(file.metadata) ? file : undefined;
+    }
 
-      const fileCount = result[0].count;
+    const result = await tx
+      .select({ count: count() })
+      .from(files)
+      .where(eq(files.fileHash, fileHash));
 
-      // delete the file from global file if it is not used by other files
-      // if `DISABLE_REMOVE_GLOBAL_FILE` is true, we will not remove the global file
-      if (fileCount === 0 && removeGlobalFile) {
-        await tx.delete(globalFiles).where(eq(globalFiles.hashId, fileHash));
+    const fileCount = result[0].count;
 
-        return file;
-      }
+    // delete the file from global file if it is not used by other files
+    // if `DISABLE_REMOVE_GLOBAL_FILE` is true, we will not remove the global file
+    if (fileCount === 0 && removeGlobalFile) {
+      await tx.delete(globalFiles).where(eq(globalFiles.hashId, fileHash));
 
-      return options?.exclusiveStorage ? file : undefined;
-    };
+      return file;
+    }
 
-    return await (trx ? executeInTransaction(trx) : this.db.transaction(executeInTransaction));
+    return undefined;
+  };
+
+  /** Delete an ordinary file row and return it only when its stored object should be removed. */
+  delete = async (id: string, removeGlobalFile: boolean = true, trx?: Transaction) => {
+    const executeInTransaction = (tx: Transaction) =>
+      this.deleteInTransaction(id, removeGlobalFile, tx, false);
+
+    return trx ? executeInTransaction(trx) : this.db.transaction(executeInTransaction);
   };
 
   /**
@@ -246,20 +245,30 @@ export class FileModel {
    * Locking the file row serializes this cleanup with foreign-key inserts, so a late send either
    * wins ownership and preserves the file or observes the deletion and fails atomically.
    *
-   * Resolves to the row only when its stored object should be deleted too —
-   * see {@link delete} for the `exclusiveStorage` rule; `undefined` covers both
-   * "still referenced, kept" and "deleted, object still shared".
+   * Resolves to the row only when its stored object should be deleted too;
+   * `undefined` covers both "still referenced, kept" and "deleted, object still shared".
    */
-  deleteUnreferenced = async (
+  private deleteUnreferencedInternal = async (
     id: string,
-    removeGlobalFile: boolean = true,
-    options?: { exclusiveStorage?: boolean },
+    removeGlobalFile: boolean,
+    provenance?: AgentShareFileProvenance,
   ) => {
     return this.db.transaction(async (trx) => {
       const [file] = await trx
         .select({ id: files.id })
         .from(files)
-        .where(and(eq(files.id, id), this.ownership()))
+        .where(
+          and(
+            eq(files.id, id),
+            this.ownership(),
+            provenance
+              ? and(
+                  sql`${files.metadata} -> 'agentShare' ->> 'shareId' = ${provenance.shareId}`,
+                  sql`${files.metadata} -> 'agentShare' ->> 'visitorUserId' = ${provenance.visitorUserId}`,
+                )
+              : notAgentShareFile(files.metadata),
+          ),
+        )
         .limit(1)
         .for('update');
       if (!file) return;
@@ -278,9 +287,19 @@ export class FileModel {
         .limit(1);
       if (sessionReference) return;
 
-      return this.delete(id, removeGlobalFile, trx, options);
+      return this.deleteInTransaction(id, removeGlobalFile, trx, Boolean(provenance));
     });
   };
+
+  deleteUnreferenced = async (id: string, removeGlobalFile: boolean = true) =>
+    this.deleteUnreferencedInternal(id, removeGlobalFile);
+
+  /** Delete an unreferenced upload only when its share and visitor provenance matches. */
+  deleteAgentShareUnreferenced = async (
+    id: string,
+    provenance: AgentShareFileProvenance,
+    removeGlobalFile: boolean = true,
+  ) => this.deleteUnreferencedInternal(id, removeGlobalFile, provenance);
 
   deleteGlobalFile = async (hashId: string) => {
     return this.db.delete(globalFiles).where(eq(globalFiles.hashId, hashId));
@@ -299,8 +318,8 @@ export class FileModel {
   };
 
   /**
-   * Bytes occupied by one agent share's visitor uploads: this user's
-   * `agent_share` rows whose provenance names `shareId`. Backs the share's
+   * Bytes occupied by one agent share's visitor uploads: this user's rows
+   * whose provenance names `shareId`. Backs the share's
    * `maxFileStorage` cap (`shareChat.createUploadUrl`), so it accepts the
    * reservation transaction to be counted inside it.
    */
@@ -310,11 +329,7 @@ export class FileModel {
       .select({ totalSize: sum(files.size) })
       .from(files)
       .where(
-        and(
-          this.ownership(),
-          eq(files.source, FileSource.AgentShare),
-          sql`${files.metadata} -> 'agentShare' ->> 'shareId' = ${shareId}`,
-        ),
+        and(this.ownership(), sql`${files.metadata} -> 'agentShare' ->> 'shareId' = ${shareId}`),
       );
 
     return Number(row?.totalSize ?? 0);
@@ -333,6 +348,7 @@ export class FileModel {
         where: and(
           inArray(files.id, ids),
           this.ownership(),
+          notAgentShareFile(files.metadata),
           // Workspace bulk deletes from non-owner members only touch their own rows.
           options?.restrictToCreator ? eq(files.userId, this.userId) : undefined,
         ),
@@ -429,10 +445,7 @@ export class FileModel {
       q ? ilike(files.name, `%${q}%`) : undefined,
       this.ownership(callerAgentVisibility),
       visibility ? eq(files.visibility, visibility) : undefined,
-      // Artifacts owned by another surface (acceptance evidence) stay reachable
-      // by id, but never appear in a listing. Applied here rather than in
-      // `ownership()` so single-row reads and deletes still resolve them.
-      or(isNull(files.source), notInArray(files.source, LIBRARY_HIDDEN_FILE_SOURCES)),
+      libraryVisibleFile(files.source, files.metadata),
     );
     if (category && category !== FilesTabs.All && category !== FilesTabs.Home) {
       const categoryFilter = buildFileCategoryFilter(files.fileType, category as FilesTabs);
@@ -539,11 +552,36 @@ export class FileModel {
 
   findByIds = async (ids: string[]) => {
     return this.db.query.files.findMany({
-      where: and(inArray(files.id, ids), this.ownership()),
+      where: and(inArray(files.id, ids), this.ownership(), notAgentShareFile(files.metadata)),
     });
   };
 
   findById = async (id: string, trx?: Transaction) => {
+    const database = trx || this.db;
+    return database.query.files.findFirst({
+      where: and(eq(files.id, id), this.ownership(), notAgentShareFile(files.metadata)),
+    });
+  };
+
+  /** Resolve only files uploaded by one visitor through one agent share. */
+  findAgentShareFilesByIds = async (ids: string[], provenance: AgentShareFileProvenance) => {
+    return this.db.query.files.findMany({
+      where: and(
+        inArray(files.id, ids),
+        this.ownership(),
+        sql`${files.metadata} -> 'agentShare' ->> 'shareId' = ${provenance.shareId}`,
+        sql`${files.metadata} -> 'agentShare' ->> 'visitorUserId' = ${provenance.visitorUserId}`,
+      ),
+    });
+  };
+
+  /** Resolve one file uploaded by a visitor through one agent share. */
+  findAgentShareFileById = async (id: string, provenance: AgentShareFileProvenance) => {
+    const [file] = await this.findAgentShareFilesByIds([id], provenance);
+    return file;
+  };
+
+  private findByIdIncludingAgentShare = async (id: string, trx?: Transaction) => {
     const database = trx || this.db;
     return database.query.files.findFirst({
       where: and(eq(files.id, id), this.ownership()),

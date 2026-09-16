@@ -103,18 +103,18 @@ vi.mock('@/database/models/user', () => ({
   }),
 }));
 
-const mockFileFindByIds = vi.fn();
-const mockFileFindById = vi.fn();
+const mockFileFindAgentShareFilesByIds = vi.fn();
+const mockFileFindAgentShareFileById = vi.fn();
 const mockFileCreate = vi.fn();
-const mockFileDeleteUnreferenced = vi.fn();
+const mockFileDeleteAgentShareUnreferenced = vi.fn();
 const mockFileCountAgentShareUsage = vi.fn();
 const FileModelMock = vi.fn(function () {
   return {
     countAgentShareUsage: mockFileCountAgentShareUsage,
     create: mockFileCreate,
-    deleteUnreferenced: mockFileDeleteUnreferenced,
-    findById: mockFileFindById,
-    findByIds: mockFileFindByIds,
+    deleteAgentShareUnreferenced: mockFileDeleteAgentShareUnreferenced,
+    findAgentShareFileById: mockFileFindAgentShareFileById,
+    findAgentShareFilesByIds: mockFileFindAgentShareFilesByIds,
   };
 });
 vi.mock('@/database/models/file', () => ({
@@ -249,10 +249,10 @@ describe('shareChatRouter', () => {
     mockSetQueuedMessages.mockResolvedValue({ success: true });
     mockSignUserJWT.mockResolvedValue('visitor-jwt');
     mockSpendGate.mockResolvedValue({ allowed: true });
-    mockFileFindByIds.mockResolvedValue([]);
-    mockFileFindById.mockResolvedValue(undefined);
+    mockFileFindAgentShareFilesByIds.mockResolvedValue([]);
+    mockFileFindAgentShareFileById.mockResolvedValue(undefined);
     mockFileCreate.mockResolvedValue({ id: 'file-new' });
-    mockFileDeleteUnreferenced.mockResolvedValue(undefined);
+    mockFileDeleteAgentShareUnreferenced.mockResolvedValue(undefined);
     mockReserveUpload.mockResolvedValue({ id: 'upload-1', size: 10 });
     mockCreatePreSignedUrl.mockResolvedValue('https://s3/put');
     mockUploadTouchActive.mockResolvedValue(undefined);
@@ -385,31 +385,23 @@ describe('shareChatRouter', () => {
 
     describe('attachments', () => {
       const fileIds = ['file-a', 'file-b'];
-      const shareFile = (id: string, overrides: Record<string, unknown> = {}) => ({
-        id,
-        metadata: { agentShare: { shareId: share.shareId, visitorUserId: VISITOR } },
-        source: 'agent_share',
-        ...overrides,
-      });
 
       it("forwards fileIds to the run after checking each one's share provenance in the CREATOR scope", async () => {
-        mockFileFindByIds.mockResolvedValue(fileIds.map((id) => shareFile(id)));
+        mockFileFindAgentShareFilesByIds.mockResolvedValue(fileIds.map((id) => ({ id })));
         const caller = await createCaller();
 
         await caller.execAgent({ fileIds, prompt: 'look', shareId: 'share-1' });
 
-        // Share uploads are creator-owned rows (`createFile`), so the lookup
-        // runs as the creator; what proves they are THIS visitor's is the
-        // provenance on each row, not the scope.
         expect(FileModelMock).toHaveBeenCalledWith(expect.anything(), OWNER);
-        expect(mockFileFindByIds).toHaveBeenCalledWith(fileIds);
+        expect(mockFileFindAgentShareFilesByIds).toHaveBeenCalledWith(fileIds, {
+          shareId: share.shareId,
+          visitorUserId: VISITOR,
+        });
         expect(mockExecAgent).toHaveBeenCalledWith(expect.objectContaining({ fileIds }));
       });
 
-      it("rejects with NOT_FOUND when any id is one of the creator's own files (no share provenance)", async () => {
-        // A visitor naming an arbitrary id must not get the creator's own
-        // document injected into the run. Fail closed on the whole request.
-        mockFileFindByIds.mockResolvedValue([shareFile('file-a'), { id: 'file-b', source: null }]);
+      it('rejects with NOT_FOUND when the provenance-scoped lookup omits any id', async () => {
+        mockFileFindAgentShareFilesByIds.mockResolvedValue([{ id: 'file-a' }]);
         const caller = await createCaller();
 
         await expect(
@@ -419,37 +411,17 @@ describe('shareChatRouter', () => {
         expect(mockExecAgent).not.toHaveBeenCalled();
       });
 
-      it("rejects another visitor's upload on the same share, and this visitor's upload on another share", async () => {
-        const caller = await createCaller();
-
-        mockFileFindByIds.mockResolvedValue([
-          shareFile('file-a', {
-            metadata: { agentShare: { shareId: share.shareId, visitorUserId: 'visitor-2' } },
-          }),
-        ]);
-        await expect(
-          caller.execAgent({ fileIds: ['file-a'], prompt: 'look', shareId: 'share-1' }),
-        ).rejects.toMatchObject({ code: 'NOT_FOUND' });
-
-        mockFileFindByIds.mockResolvedValue([
-          shareFile('file-a', {
-            metadata: { agentShare: { shareId: 'share-other', visitorUserId: VISITOR } },
-          }),
-        ]);
-        await expect(
-          caller.execAgent({ fileIds: ['file-a'], prompt: 'look', shareId: 'share-1' }),
-        ).rejects.toMatchObject({ code: 'NOT_FOUND' });
-        expect(mockExecAgent).not.toHaveBeenCalled();
-      });
-
       it('accepts duplicate ids as long as each distinct id is owned', async () => {
-        mockFileFindByIds.mockResolvedValue([shareFile('file-a')]);
+        mockFileFindAgentShareFilesByIds.mockResolvedValue([{ id: 'file-a' }]);
         const caller = await createCaller();
 
         await expect(
           caller.execAgent({ fileIds: ['file-a', 'file-a'], prompt: 'look', shareId: 'share-1' }),
         ).resolves.toMatchObject({ operationId: 'op-1' });
-        expect(mockFileFindByIds).toHaveBeenCalledWith(['file-a']);
+        expect(mockFileFindAgentShareFilesByIds).toHaveBeenCalledWith(['file-a'], {
+          shareId: share.shareId,
+          visitorUserId: VISITOR,
+        });
       });
 
       it('skips the ownership lookup entirely when no fileIds are sent', async () => {
@@ -794,7 +766,7 @@ describe('shareChatRouter', () => {
       });
     });
 
-    it('writes a creator-owned agent_share row with the visitor in its provenance and settles the session', async () => {
+    it('writes a creator-owned row with visitor provenance and settles the session', async () => {
       const caller = await createCaller();
 
       const result = await caller.createFile(input);
@@ -814,16 +786,13 @@ describe('shareChatRouter', () => {
           }),
           name: 'cat.png',
           size: 10,
-          source: 'agent_share',
           url: pathname,
         }),
         false,
         expect.anything(),
       );
-      // Share rows stay out of the hash-keyed `global_files` graph: no hash is
-      // stored and no global row is registered, so `removeFile` can always
-      // delete the row's own object (see the `exclusiveStorage` test below).
       expect(mockFileCreate.mock.calls[0][0]).not.toHaveProperty('fileHash');
+      expect(mockFileCreate.mock.calls[0][0]).not.toHaveProperty('source');
       expect(mockUploadSettle).toHaveBeenCalledWith('upload-1', 'file-new', expect.anything());
     });
 
@@ -916,36 +885,32 @@ describe('shareChatRouter', () => {
   });
 
   describe('removeFile', () => {
-    const provenance = { agentShare: { shareId: 'share-1', visitorUserId: VISITOR } };
-
     it("deletes this visitor's own unsent share upload and the stored object", async () => {
-      mockFileFindById.mockResolvedValue({
+      mockFileFindAgentShareFileById.mockResolvedValue({ id: 'file-a' });
+      mockFileDeleteAgentShareUnreferenced.mockResolvedValue({
         id: 'file-a',
-        metadata: provenance,
-        source: 'agent_share',
+        url: 'files/x/cat.png',
       });
-      mockFileDeleteUnreferenced.mockResolvedValue({ id: 'file-a', url: 'files/x/cat.png' });
       const caller = await createCaller();
 
       await caller.removeFile({ fileId: 'file-a', shareId: 'share-1' });
 
       expect(FileModelMock).toHaveBeenCalledWith(expect.anything(), OWNER);
-      // `exclusiveStorage`: the row owns its object outright (never registered
-      // in `global_files`), so the object is deleted whenever the row is, even
-      // if some other file happens to carry the same content hash.
-      expect(mockFileDeleteUnreferenced).toHaveBeenCalledWith('file-a', true, {
-        exclusiveStorage: true,
+      expect(mockFileFindAgentShareFileById).toHaveBeenCalledWith('file-a', {
+        shareId: share.shareId,
+        visitorUserId: VISITOR,
       });
+      expect(mockFileDeleteAgentShareUnreferenced).toHaveBeenCalledWith(
+        'file-a',
+        { shareId: share.shareId, visitorUserId: VISITOR },
+        true,
+      );
       expect(mockDeleteStoredFile).toHaveBeenCalledWith('files/x/cat.png');
     });
 
     it('leaves the stored object alone when the row is already referenced by a message', async () => {
-      mockFileFindById.mockResolvedValue({
-        id: 'file-a',
-        metadata: provenance,
-        source: 'agent_share',
-      });
-      mockFileDeleteUnreferenced.mockResolvedValue(undefined);
+      mockFileFindAgentShareFileById.mockResolvedValue({ id: 'file-a' });
+      mockFileDeleteAgentShareUnreferenced.mockResolvedValue(undefined);
       const caller = await createCaller();
 
       await caller.removeFile({ fileId: 'file-a', shareId: 'share-1' });
@@ -953,23 +918,13 @@ describe('shareChatRouter', () => {
       expect(mockDeleteStoredFile).not.toHaveBeenCalled();
     });
 
-    it("refuses the creator's own file and another visitor's share upload alike", async () => {
+    it('refuses a file outside the share and visitor provenance scope', async () => {
       const caller = await createCaller();
 
-      mockFileFindById.mockResolvedValue({ id: 'file-a', metadata: null, source: null });
       await expect(
         caller.removeFile({ fileId: 'file-a', shareId: 'share-1' }),
       ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'File not found' });
-
-      mockFileFindById.mockResolvedValue({
-        id: 'file-a',
-        metadata: { agentShare: { shareId: 'share-1', visitorUserId: 'visitor-2' } },
-        source: 'agent_share',
-      });
-      await expect(
-        caller.removeFile({ fileId: 'file-a', shareId: 'share-1' }),
-      ).rejects.toMatchObject({ code: 'NOT_FOUND' });
-      expect(mockFileDeleteUnreferenced).not.toHaveBeenCalled();
+      expect(mockFileDeleteAgentShareUnreferenced).not.toHaveBeenCalled();
     });
   });
 

@@ -2,20 +2,29 @@
 import type { LobeChatDatabase } from '@lobechat/database';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { resolveAttachmentMetadata } from './resolveAttachments';
+import { resolveAttachmentMetadata, resolveAttachmentsByFileIds } from './resolveAttachments';
 
 const mocks = vi.hoisted(() => ({
   findByIds: vi.fn(),
+  findAgentShareFilesByIds: vi.fn(),
   getFullFileUrl: vi.fn(),
+  parseFile: vi.fn(),
 }));
 
 vi.mock('@/database/models/file', () => ({
   FileModel: vi.fn().mockImplementation(function () {
-    return { findByIds: mocks.findByIds };
+    return {
+      findAgentShareFilesByIds: mocks.findAgentShareFilesByIds,
+      findByIds: mocks.findByIds,
+    };
   }),
 }));
 
-vi.mock('@/server/services/document', () => ({ DocumentService: vi.fn() }));
+vi.mock('@/server/services/document', () => ({
+  DocumentService: vi.fn().mockImplementation(function () {
+    return { parseFile: mocks.parseFile };
+  }),
+}));
 
 vi.mock('@/server/services/file', () => ({
   FileService: vi.fn().mockImplementation(function () {
@@ -58,6 +67,60 @@ describe('resolveAttachmentMetadata', () => {
         size: 42,
         url: 'https://storage.example.com/tasks/report.pdf?X-Amz-Signature=current',
       },
+    ]);
+  });
+
+  it('uses the provenance-scoped reader for an agent-share run', async () => {
+    mocks.findAgentShareFilesByIds.mockResolvedValue([
+      {
+        fileType: 'image/png',
+        id: 'file-visitor',
+        name: 'cat.png',
+        size: 42,
+        url: 'agent-share/cat.png',
+      },
+    ]);
+    mocks.getFullFileUrl.mockResolvedValue('https://storage.example.com/agent-share/cat.png');
+
+    const result = await resolveAttachmentsByFileIds({
+      agentShare: { shareId: 'share-1', visitorUserId: 'visitor-1' },
+      db: {} as LobeChatDatabase,
+      fileIds: ['file-visitor'],
+      userId: 'creator-1',
+    });
+
+    expect(mocks.findAgentShareFilesByIds).toHaveBeenCalledWith(['file-visitor'], {
+      shareId: 'share-1',
+      visitorUserId: 'visitor-1',
+    });
+    expect(mocks.findByIds).not.toHaveBeenCalled();
+    expect(result.orderedFileIds).toEqual(['file-visitor']);
+  });
+
+  it('passes share provenance into document parsing', async () => {
+    const agentShare = { shareId: 'share-1', visitorUserId: 'visitor-1' };
+    mocks.findAgentShareFilesByIds.mockResolvedValue([
+      {
+        fileType: 'application/pdf',
+        id: 'file-visitor-pdf',
+        name: 'report.pdf',
+        size: 42,
+        url: 'agent-share/report.pdf',
+      },
+    ]);
+    mocks.getFullFileUrl.mockResolvedValue('https://storage.example.com/agent-share/report.pdf');
+    mocks.parseFile.mockResolvedValue({ content: 'Visitor report' });
+
+    const result = await resolveAttachmentsByFileIds({
+      agentShare,
+      db: {} as LobeChatDatabase,
+      fileIds: ['file-visitor-pdf'],
+      userId: 'creator-1',
+    });
+
+    expect(mocks.parseFile).toHaveBeenCalledWith('file-visitor-pdf', agentShare);
+    expect(result.fileList).toEqual([
+      expect.objectContaining({ content: 'Visitor report', id: 'file-visitor-pdf' }),
     ]);
   });
 });

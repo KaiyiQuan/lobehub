@@ -107,6 +107,7 @@ describe('DocumentService', () => {
     mockDocumentModel = {
       create: vi.fn(),
       delete: vi.fn(),
+      findAgentShareDocumentByFileId: vi.fn().mockResolvedValue(null),
       findByFileId: vi.fn().mockResolvedValue(null),
       findById: vi.fn(),
       query: vi.fn(),
@@ -1862,6 +1863,27 @@ describe('DocumentService', () => {
       );
       expect(mockCleanup).toHaveBeenCalled();
       expect(result).toEqual({ id: 'doc-1', title: 'Readme' });
+    });
+
+    it('should preserve agent-share provenance when downloading a visitor file', async () => {
+      const agentShare = { shareId: 'share-1', visitorUserId: 'visitor-1' };
+      vi.mocked(loadFile).mockResolvedValue({
+        content: 'Visitor content',
+        fileType: 'markdown',
+        metadata: {},
+        totalCharCount: 15,
+        totalLineCount: 1,
+      } as any);
+      mockDocumentModel.create.mockResolvedValue({ id: 'doc-visitor' });
+
+      await service.parseFile('file-visitor', agentShare);
+
+      expect(mockDocumentModel.findAgentShareDocumentByFileId).toHaveBeenCalledWith(
+        'file-visitor',
+        agentShare,
+      );
+      expect(mockDocumentModel.findByFileId).not.toHaveBeenCalled();
+      expect(mockFileService.downloadFileToLocal).toHaveBeenCalledWith('file-visitor', agentShare);
     });
 
     it('should use file name as title (stripping extension) when metadata has no title', async () => {

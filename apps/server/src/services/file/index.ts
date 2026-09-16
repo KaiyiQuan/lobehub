@@ -1,4 +1,5 @@
 import { type LobeChatDatabase, type Transaction } from '@lobechat/database';
+import type { AgentShareFileProvenance } from '@lobechat/types';
 import { inferContentTypeFromImageUrl, nanoid, uuid } from '@lobechat/utils';
 import { TRPCError } from '@trpc/server';
 import { sha256 } from 'js-sha256';
@@ -512,8 +513,11 @@ export class FileService {
 
   async downloadFileToLocal(
     fileId: string,
+    agentShare?: AgentShareFileProvenance,
   ): Promise<{ cleanup: () => void; file: FileItem; filePath: string }> {
-    const file = await this.fileModel.findById(fileId);
+    const file = agentShare
+      ? await this.fileModel.findAgentShareFileById(fileId, agentShare)
+      : await this.fileModel.findById(fileId);
     if (!file) {
       throw new TRPCError({ code: 'BAD_REQUEST', message: 'File not found' });
     }
@@ -525,7 +529,15 @@ export class FileService {
       console.error(e);
       // if file not found, delete it from db
       if ((e as any).Code === 'NoSuchKey') {
-        await this.fileModel.delete(fileId, serverDBEnv.REMOVE_GLOBAL_FILE);
+        if (agentShare) {
+          await this.fileModel.deleteAgentShareUnreferenced(
+            fileId,
+            agentShare,
+            serverDBEnv.REMOVE_GLOBAL_FILE,
+          );
+        } else {
+          await this.fileModel.delete(fileId, serverDBEnv.REMOVE_GLOBAL_FILE);
+        }
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'File not found' });
       }
     }

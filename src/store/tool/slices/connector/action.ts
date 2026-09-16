@@ -3,11 +3,12 @@ import { isLocalOrPrivateUrl } from '@lobechat/utils';
 
 import { getActiveWorkspaceId } from '@/business/client/hooks/useActiveWorkspaceId';
 import type { ConnectorToolPermission } from '@/database/schemas';
-import { lambdaClient } from '@/libs/trpc/client';
+import { lambdaClient, toolsClient } from '@/libs/trpc/client';
 import { mcpService } from '@/services/mcp';
 import type { StoreSetter } from '@/store/types';
 
 import type { ToolStore } from '../../store';
+import type { LobehubSkillTool } from '../lobehubSkillStore/types';
 import type { ConnectorWithTools } from './types';
 
 type Setter = StoreSetter<ToolStore>;
@@ -304,13 +305,15 @@ export class ConnectorActionImpl {
    * Idempotent — safe to call whenever the detail panel opens.
    */
   syncToolsFromClient = async (params: {
+    id?: string;
     identifier: string;
     name: string;
     sourceType: 'builtin' | 'custom' | 'marketplace';
     tools: Array<{ description?: string; inputSchema?: Record<string, unknown>; toolName: string }>;
   }): Promise<string> => {
     const result = await lambdaClient.connector.syncToolsFromClient.mutate(params);
-    await this.fetchConnectors();
+    if (params.id) await this.#refreshConnectorLists();
+    else await this.fetchConnectors();
     return result.connectorId;
   };
 
@@ -326,10 +329,13 @@ export class ConnectorActionImpl {
       'syncLobehubSkillTools/start',
     );
     try {
-      const response = await this.#get().refreshLobehubSkillTools(identifier);
-      if (!response) throw new Error('Failed to refresh connector tools');
+      // Keep this row-targeted refresh out of the provider cache: SkillDetail
+      // bootstraps a base connector whenever that cache's tool snapshot changes.
+      const response: { tools: LobehubSkillTool[] } =
+        await toolsClient.market.connectListTools.query({ provider: identifier });
 
       await this.#get().syncToolsFromClient({
+        id,
         identifier,
         name,
         sourceType: 'marketplace',

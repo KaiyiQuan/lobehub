@@ -755,7 +755,7 @@ describe('lobehubSkillStore actions', () => {
       vi.mocked(toolsClient.market.connectListTools.query).mockResolvedValue(mockTools as any);
 
       await act(async () => {
-        await expect(result.current.refreshLobehubSkillTools('linear')).resolves.toEqual(mockTools);
+        await result.current.refreshLobehubSkillTools('linear');
       });
 
       expect(result.current.lobehubSkillServers[0].tools).toHaveLength(2);
@@ -807,7 +807,7 @@ describe('lobehubSkillStore actions', () => {
       );
 
       await act(async () => {
-        await expect(result.current.refreshLobehubSkillTools('linear')).resolves.toBeUndefined();
+        await result.current.refreshLobehubSkillTools('linear');
       });
 
       // Should not crash and server should remain unchanged

@@ -811,6 +811,7 @@ export const connectorRouter = router({
   syncToolsFromClient: connectorProcedure
     .input(
       z.object({
+        id: z.string().uuid().optional(),
         identifier: z.string().min(1),
         name: z.string().min(1),
         sourceType: z.enum([
@@ -829,6 +830,7 @@ export const connectorRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const { connectorId, sourceType, writable } = await upsertConnectorEntry(ctx, {
+        id: input.id,
         identifier: input.identifier,
         name: input.name,
         sourceType: input.sourceType,
@@ -1036,6 +1038,7 @@ async function upsertConnectorEntry(
     avatar?: string;
     composio?: ConnectorMetadata['composio'];
     description?: string;
+    id?: string;
     identifier: string;
     name: string;
     sourceType: string;
@@ -1061,6 +1064,21 @@ async function upsertConnectorEntry(
           userId: ctx.userId,
           workspaceId: ctx.workspaceId,
         });
+
+  // Explicit refresh targets an existing row, including agent-owned rows.
+  // Never fall back to a same-named base row or rewrite connection metadata.
+  if (params.id) {
+    const row = await ctx.connectorModel.findPublicById(params.id);
+    if (!row) throw new TRPCError({ code: 'NOT_FOUND', message: 'Connector not found' });
+    if (row.identifier !== params.identifier || row.sourceType !== params.sourceType) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'Connector identity does not match' });
+    }
+    return {
+      connectorId: row.id,
+      sourceType: row.sourceType,
+      writable: canWrite && (!isWorkspaceNonOwner(ctx) || row.userId === ctx.userId),
+    };
+  }
 
   const existing = await ctx.connectorModel.queryByIdentifiers([params.identifier]);
   if (existing.length > 0) {

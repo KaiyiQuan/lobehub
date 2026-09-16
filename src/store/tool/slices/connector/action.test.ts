@@ -70,6 +70,7 @@ describe('syncLobehubSkillTools', () => {
     });
     await waitFor(() =>
       expect(persist).toHaveBeenCalledWith({
+        id: linear.id,
         identifier: 'linear',
         name: 'Linear',
         sourceType: 'marketplace',
@@ -94,6 +95,39 @@ describe('syncLobehubSkillTools', () => {
       [linear.id]: false,
       unrelated: true,
     });
+  });
+
+  it('should persist the selected agent id and wait for the agent-bound list to refresh', async () => {
+    const agent = { ...linear, agentId: 'agent-a', id: 'agent-linear-connector', tools: [] };
+    const refreshed = Promise.withResolvers<any>();
+    const updatedAgent = { ...agent, tools: [{ toolName: 'save_document' }] };
+    discovery.mockResolvedValue({ tools: [] } as any);
+    persist.mockResolvedValue({ connectorId: agent.id, toolCount: 0 });
+    listQuery.mockResolvedValue([linear]);
+    listAgentBoundQuery.mockReturnValueOnce(refreshed.promise);
+    useToolStore.setState({
+      agentBoundConnectors: [agent] as any,
+      connectors: [linear] as any,
+      isAgentBoundInit: true,
+    });
+
+    const refresh = useToolStore.getState().syncLobehubSkillTools(agent);
+    await waitFor(() => expect(listAgentBoundQuery).toHaveBeenCalledTimes(1));
+    expect(persist).toHaveBeenCalledWith({
+      id: agent.id,
+      identifier: 'linear',
+      name: 'Linear',
+      sourceType: 'marketplace',
+      tools: [],
+    });
+    expect(useToolStore.getState().connectorSyncing[agent.id]).toBe(true);
+    expect(useToolStore.getState().agentBoundConnectors).toEqual([agent]);
+
+    refreshed.resolve([updatedAgent]);
+    await refresh;
+    expect(useToolStore.getState().agentBoundConnectors).toEqual([updatedAgent]);
+    expect(useToolStore.getState().connectors).toEqual([linear]);
+    expect(useToolStore.getState().connectorSyncing[agent.id]).toBe(false);
   });
 
   it.each(['discovery', 'persistence', 'list refresh'])(

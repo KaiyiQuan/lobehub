@@ -28,12 +28,11 @@ const mocks = vi.hoisted(() => ({
     deleteConnector: vi.fn(),
     disconnectConnector: vi.fn(),
     fetchConnectors: vi.fn(),
-    refreshLobehubSkillTools: vi.fn(),
     resetConnectorPermissions: vi.fn(),
     syncBuiltinTool: vi.fn(),
     syncConnectorTools: vi.fn(),
+    syncLobehubSkillTools: vi.fn(),
     syncPluginTools: vi.fn(),
-    syncToolsFromClient: vi.fn(),
     syncing: false,
     uninstallBuiltinTool: vi.fn(),
     uninstallMCPPlugin: vi.fn(),
@@ -127,43 +126,46 @@ describe('ConnectorDetail', () => {
     expect(screen.getByRole('button', { name: 'Uninstall' })).toBeInTheDocument();
   });
 
-  it('should refresh Linear via OAuth discovery and persist the returned tools', async () => {
+  it('should refresh Linear via the pending-aware OAuth sync action', async () => {
     mocks.toolState.connectors[0].identifier = 'linear';
-    mocks.toolState.refreshLobehubSkillTools.mockResolvedValueOnce({
-      tools: [
-        { description: 'Save document', inputSchema: { type: 'object' }, name: 'save_document' },
-      ],
-    });
     render(<ConnectorDetail connectorId="connector-1" />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
 
     await waitFor(() =>
-      expect(mocks.toolState.syncToolsFromClient).toHaveBeenCalledWith({
-        identifier: 'linear',
-        name: 'Notion',
-        sourceType: ConnectorSourceType.marketplace,
-        tools: [
-          {
-            description: 'Save document',
-            inputSchema: { type: 'object' },
-            toolName: 'save_document',
-          },
-        ],
-      }),
+      expect(mocks.toolState.syncLobehubSkillTools).toHaveBeenCalledWith(
+        mocks.toolState.connectors[0],
+      ),
     );
-    expect(mocks.toolState.refreshLobehubSkillTools).toHaveBeenCalledWith('linear');
     expect(mocks.toolState.syncPluginTools).not.toHaveBeenCalled();
   });
 
-  it('should not persist a stale cached list when Linear discovery fails', async () => {
+  it('should disable refresh while syncing and enable it again after completion', () => {
+    mocks.toolState.connectors[0].identifier = 'linear';
+    mocks.toolState.syncing = true;
+    const { rerender } = render(<ConnectorDetail connectorId="connector-1" />);
+    const refresh = screen.getByRole('button', { name: 'Refresh' });
+
+    expect(refresh).toBeDisabled();
+    fireEvent.click(refresh);
+    fireEvent.click(refresh);
+    expect(mocks.toolState.syncLobehubSkillTools).not.toHaveBeenCalled();
+
+    mocks.toolState.syncing = false;
+    rerender(<ConnectorDetail connectorId="connector-1" middleSlot={<div />} />);
+    expect(refresh).toBeEnabled();
+    fireEvent.click(refresh);
+    expect(mocks.toolState.syncLobehubSkillTools).toHaveBeenCalledTimes(1);
+  });
+
+  it('should show feedback when Linear sync fails', async () => {
     const notifyError = vi.spyOn(toast, 'error').mockReturnValue({
       close: vi.fn(),
       id: 'test-toast',
       update: vi.fn(),
     });
     mocks.toolState.connectors[0].identifier = 'linear';
-    mocks.toolState.refreshLobehubSkillTools.mockResolvedValueOnce(undefined);
+    mocks.toolState.syncLobehubSkillTools.mockRejectedValueOnce(new Error('Unavailable'));
     render(<ConnectorDetail connectorId="connector-1" />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
@@ -171,7 +173,6 @@ describe('ConnectorDetail', () => {
     await waitFor(() =>
       expect(notifyError).toHaveBeenCalledWith('Operation failed, please try again'),
     );
-    expect(mocks.toolState.syncToolsFromClient).not.toHaveBeenCalled();
     expect(mocks.toolState.syncPluginTools).not.toHaveBeenCalled();
   });
 
@@ -188,7 +189,7 @@ describe('ConnectorDetail', () => {
       fireEvent.click(screen.getByRole('button', { name: label }));
 
       await waitFor(() => expect(mocks.toolState[action]).toHaveBeenCalledWith(id));
-      expect(mocks.toolState.refreshLobehubSkillTools).not.toHaveBeenCalled();
+      expect(mocks.toolState.syncLobehubSkillTools).not.toHaveBeenCalled();
     },
   );
 });

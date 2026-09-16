@@ -8,6 +8,7 @@ import { mcpService } from '@/services/mcp';
 import type { StoreSetter } from '@/store/types';
 
 import type { ToolStore } from '../../store';
+import type { ConnectorWithTools } from './types';
 
 type Setter = StoreSetter<ToolStore>;
 
@@ -311,6 +312,40 @@ export class ConnectorActionImpl {
     const result = await lambdaClient.connector.syncToolsFromClient.mutate(params);
     await this.fetchConnectors();
     return result.connectorId;
+  };
+
+  syncLobehubSkillTools = async (
+    connector: Pick<ConnectorWithTools, 'id' | 'identifier' | 'name'>,
+  ): Promise<void> => {
+    const { id, identifier, name } = connector;
+    if (this.#get().connectorSyncing[id]) return;
+
+    this.#set(
+      (s) => ({ connectorSyncing: { ...s.connectorSyncing, [id]: true } }),
+      false,
+      'syncLobehubSkillTools/start',
+    );
+    try {
+      const response = await this.#get().refreshLobehubSkillTools(identifier);
+      if (!response) throw new Error('Failed to refresh connector tools');
+
+      await this.#get().syncToolsFromClient({
+        identifier,
+        name,
+        sourceType: 'marketplace',
+        tools: response.tools.map((tool) => ({
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+          toolName: tool.name,
+        })),
+      });
+    } finally {
+      this.#set(
+        (s) => ({ connectorSyncing: { ...s.connectorSyncing, [id]: false } }),
+        false,
+        'syncLobehubSkillTools/end',
+      );
+    }
   };
 
   /**

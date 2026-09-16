@@ -64,8 +64,7 @@ const ConnectorDetail = memo<ConnectorDetailProps>(
     const syncConnectorTools = useToolStore((s) => s.syncConnectorTools);
     const syncBuiltinTool = useToolStore((s) => s.syncBuiltinTool);
     const syncPluginTools = useToolStore((s) => s.syncPluginTools);
-    const refreshLobehubSkillTools = useToolStore((s) => s.refreshLobehubSkillTools);
-    const syncToolsFromClient = useToolStore((s) => s.syncToolsFromClient);
+    const syncLobehubSkillTools = useToolStore((s) => s.syncLobehubSkillTools);
     const resetConnectorPermissions = useToolStore((s) => s.resetConnectorPermissions);
     const disconnectConnector = useToolStore((s) => s.disconnectConnector);
     const deleteConnector = useToolStore((s) => s.deleteConnector);
@@ -129,19 +128,7 @@ const ConnectorDetail = memo<ConnectorDetailProps>(
           await syncBuiltinTool(connector.identifier);
         } else if (connector.sourceType === ConnectorSourceType.marketplace) {
           if (connector.identifier === 'linear') {
-            const response = await refreshLobehubSkillTools(connector.identifier);
-            if (!response) throw new Error('Failed to refresh Linear tools');
-
-            await syncToolsFromClient({
-              identifier: connector.identifier,
-              name: connector.name,
-              sourceType: ConnectorSourceType.marketplace,
-              tools: response.tools.map((tool) => ({
-                description: tool.description,
-                inputSchema: tool.inputSchema,
-                toolName: tool.name,
-              })),
-            });
+            await syncLobehubSkillTools(connector);
           } else {
             await syncPluginTools(connector.identifier);
           }
@@ -155,11 +142,10 @@ const ConnectorDetail = memo<ConnectorDetailProps>(
       connector,
       connectorId,
       notifyActionError,
-      refreshLobehubSkillTools,
       syncBuiltinTool,
+      syncLobehubSkillTools,
       syncPluginTools,
       syncConnectorTools,
-      syncToolsFromClient,
     ]);
 
     const handleUninstall = () => {
@@ -266,7 +252,7 @@ const ConnectorDetail = memo<ConnectorDetailProps>(
             {/* Sync/Refresh: re-sync tool list from manifest */}
             <ManageTooltip title={canSync ? undefined : manageTooltip}>
               <Button
-                disabled={!canSync}
+                disabled={!canSync || syncing}
                 icon={<RefreshCwIcon size={14} />}
                 loading={syncing}
                 size="small"

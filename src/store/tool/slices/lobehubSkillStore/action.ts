@@ -236,7 +236,9 @@ export class LobehubSkillStoreActionImpl {
     }
   };
 
-  refreshLobehubSkillTools = async (provider: string): Promise<void> => {
+  refreshLobehubSkillTools = async (
+    provider: string,
+  ): Promise<{ tools: LobehubSkillTool[] } | undefined> => {
     try {
       const response = await toolsClient.market.connectListTools.query({ provider });
 
@@ -250,6 +252,7 @@ export class LobehubSkillStoreActionImpl {
         false,
         n('refreshLobehubSkillTools/success'),
       );
+      return response;
     } catch (error) {
       console.error('[LobehubSkill] Failed to refresh tools:', error);
     }

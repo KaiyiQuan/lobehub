@@ -1,8 +1,9 @@
 /**
  * @vitest-environment happy-dom
  */
-import { render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { toast } from '@lobehub/ui/base-ui';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ConnectorSourceType } from '@/database/schemas';
 
@@ -27,10 +28,12 @@ const mocks = vi.hoisted(() => ({
     deleteConnector: vi.fn(),
     disconnectConnector: vi.fn(),
     fetchConnectors: vi.fn(),
+    refreshLobehubSkillTools: vi.fn(),
     resetConnectorPermissions: vi.fn(),
     syncBuiltinTool: vi.fn(),
     syncConnectorTools: vi.fn(),
     syncPluginTools: vi.fn(),
+    syncToolsFromClient: vi.fn(),
     syncing: false,
     uninstallBuiltinTool: vi.fn(),
     uninstallMCPPlugin: vi.fn(),
@@ -82,6 +85,8 @@ vi.mock('./ToolPermissionGroup', () => ({
 }));
 
 describe('ConnectorDetail', () => {
+  afterEach(() => vi.restoreAllMocks());
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.toolState.connectorTools = {
@@ -121,4 +126,69 @@ describe('ConnectorDetail', () => {
 
     expect(screen.getByRole('button', { name: 'Uninstall' })).toBeInTheDocument();
   });
+
+  it('should refresh Linear via OAuth discovery and persist the returned tools', async () => {
+    mocks.toolState.connectors[0].identifier = 'linear';
+    mocks.toolState.refreshLobehubSkillTools.mockResolvedValueOnce({
+      tools: [
+        { description: 'Save document', inputSchema: { type: 'object' }, name: 'save_document' },
+      ],
+    });
+    render(<ConnectorDetail connectorId="connector-1" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    await waitFor(() =>
+      expect(mocks.toolState.syncToolsFromClient).toHaveBeenCalledWith({
+        identifier: 'linear',
+        name: 'Notion',
+        sourceType: ConnectorSourceType.marketplace,
+        tools: [
+          {
+            description: 'Save document',
+            inputSchema: { type: 'object' },
+            toolName: 'save_document',
+          },
+        ],
+      }),
+    );
+    expect(mocks.toolState.refreshLobehubSkillTools).toHaveBeenCalledWith('linear');
+    expect(mocks.toolState.syncPluginTools).not.toHaveBeenCalled();
+  });
+
+  it('should not persist a stale cached list when Linear discovery fails', async () => {
+    const notifyError = vi.spyOn(toast, 'error').mockReturnValue({
+      close: vi.fn(),
+      id: 'test-toast',
+      update: vi.fn(),
+    });
+    mocks.toolState.connectors[0].identifier = 'linear';
+    mocks.toolState.refreshLobehubSkillTools.mockResolvedValueOnce(undefined);
+    render(<ConnectorDetail connectorId="connector-1" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    await waitFor(() =>
+      expect(notifyError).toHaveBeenCalledWith('Operation failed, please try again'),
+    );
+    expect(mocks.toolState.syncToolsFromClient).not.toHaveBeenCalled();
+    expect(mocks.toolState.syncPluginTools).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [ConnectorSourceType.marketplace, 'syncPluginTools', 'notion', 'Refresh'],
+    [ConnectorSourceType.builtin, 'syncBuiltinTool', 'notion', 'Refresh'],
+    [ConnectorSourceType.custom, 'syncConnectorTools', 'connector-1', 'Sync'],
+  ] as const)(
+    'should keep the %s refresh route unchanged',
+    async (sourceType, action, id, label) => {
+      mocks.toolState.connectors[0].sourceType = sourceType;
+      render(<ConnectorDetail connectorId="connector-1" />);
+
+      fireEvent.click(screen.getByRole('button', { name: label }));
+
+      await waitFor(() => expect(mocks.toolState[action]).toHaveBeenCalledWith(id));
+      expect(mocks.toolState.refreshLobehubSkillTools).not.toHaveBeenCalled();
+    },
+  );
 });

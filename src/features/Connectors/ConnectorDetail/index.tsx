@@ -64,6 +64,8 @@ const ConnectorDetail = memo<ConnectorDetailProps>(
     const syncConnectorTools = useToolStore((s) => s.syncConnectorTools);
     const syncBuiltinTool = useToolStore((s) => s.syncBuiltinTool);
     const syncPluginTools = useToolStore((s) => s.syncPluginTools);
+    const refreshLobehubSkillTools = useToolStore((s) => s.refreshLobehubSkillTools);
+    const syncToolsFromClient = useToolStore((s) => s.syncToolsFromClient);
     const resetConnectorPermissions = useToolStore((s) => s.resetConnectorPermissions);
     const disconnectConnector = useToolStore((s) => s.disconnectConnector);
     const deleteConnector = useToolStore((s) => s.deleteConnector);
@@ -126,7 +128,23 @@ const ConnectorDetail = memo<ConnectorDetailProps>(
         if (connector.sourceType === ConnectorSourceType.builtin) {
           await syncBuiltinTool(connector.identifier);
         } else if (connector.sourceType === ConnectorSourceType.marketplace) {
-          await syncPluginTools(connector.identifier);
+          if (connector.identifier === 'linear') {
+            const response = await refreshLobehubSkillTools(connector.identifier);
+            if (!response) throw new Error('Failed to refresh Linear tools');
+
+            await syncToolsFromClient({
+              identifier: connector.identifier,
+              name: connector.name,
+              sourceType: ConnectorSourceType.marketplace,
+              tools: response.tools.map((tool) => ({
+                description: tool.description,
+                inputSchema: tool.inputSchema,
+                toolName: tool.name,
+              })),
+            });
+          } else {
+            await syncPluginTools(connector.identifier);
+          }
         } else {
           await syncConnectorTools(connectorId);
         }
@@ -137,9 +155,11 @@ const ConnectorDetail = memo<ConnectorDetailProps>(
       connector,
       connectorId,
       notifyActionError,
+      refreshLobehubSkillTools,
       syncBuiltinTool,
       syncPluginTools,
       syncConnectorTools,
+      syncToolsFromClient,
     ]);
 
     const handleUninstall = () => {

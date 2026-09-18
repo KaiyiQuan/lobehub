@@ -75,7 +75,7 @@ jobs:
       shell_abi: ${{ steps.gate.outputs.shell_abi }}
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         id: checkout
 
       - name: Resolve update server base URL
@@ -197,7 +197,7 @@ jobs:
       matrix:
         platform: [darwin, win32, linux]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup build environment
         id: setup
@@ -314,7 +314,7 @@ jobs:
       published: ${{ steps.publish.outputs.published }}
       skipped: ${{ steps.collect.outputs.skipped }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download core releases
         uses: actions/download-artifact@v7

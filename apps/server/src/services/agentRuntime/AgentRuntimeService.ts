@@ -1215,6 +1215,8 @@ export class AgentRuntimeService {
         onInterventionPrepared?.();
       }
 
+      await params.onOperationCreated?.(operationId);
+
       throwIfAborted(signal, 'Agent execution aborted before first step scheduling');
 
       let messageId: string | undefined;

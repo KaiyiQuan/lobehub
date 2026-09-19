@@ -6,6 +6,7 @@ import { isSafeVersion } from './store';
 export interface CorePointer {
   abi: string;
   blacklist: string[];
+  channel: string | null;
   current: string | null;
   previous: string | null;
   staged: string | null;
@@ -17,6 +18,7 @@ const versionOrNull = (value: unknown): string | null =>
 export const emptyPointer = (abi: string): CorePointer => ({
   abi,
   blacklist: [],
+  channel: null,
   current: null,
   previous: null,
   staged: null,
@@ -41,6 +43,7 @@ export const readPointer = (otaRoot: string, abi: string): CorePointer => {
     return {
       abi,
       blacklist: Array.isArray(raw.blacklist) ? raw.blacklist.filter(versionOrNull) : [],
+      channel: typeof raw.channel === 'string' ? raw.channel : null,
       current: versionOrNull(raw.current),
       previous: versionOrNull(raw.previous),
       staged: versionOrNull(raw.staged),

@@ -31,7 +31,7 @@ const writeJson = (file, value) => {
   fs.writeFileSync(file, JSON.stringify(value));
 };
 
-const writeCore = (dir, version, { shellAbi = ABI, seq, mutate } = {}) => {
+const writeCore = (dir, version, { shellAbi = ABI, seq, channel, mutate } = {}) => {
   const files = {
     'cli/lobe-cli.js': 'cli',
     'dist/main/index.js': `module.exports = ${JSON.stringify(version)};`,
@@ -45,7 +45,13 @@ const writeCore = (dir, version, { shellAbi = ABI, seq, mutate } = {}) => {
     fs.writeFileSync(path.join(dir, filePath), content);
     return { path: filePath, sha256: sha256(content), size: content.length };
   });
-  const manifest = signManifest({ shellAbi, tree, version, ...(seq === undefined ? {} : { seq }) });
+  const manifest = signManifest({
+    shellAbi,
+    tree,
+    version,
+    ...(seq === undefined ? {} : { seq }),
+    ...(channel === undefined ? {} : { channel }),
+  });
   mutate?.(dir, manifest);
   writeJson(path.join(dir, 'manifest.json'), manifest);
 };
@@ -92,7 +98,7 @@ describe('resolveCore', () => {
     expect(core.source).toBe('external');
     expect(core.dir).toBe(path.join(otaRoot(), 'cores', '1.1.0'));
     expect(core.manifest.version).toBe('1.1.0');
-    expect(readBoot()).toEqual({ failures: 1, version: '1.1.0' });
+    expect(readBoot()).toEqual({ failures: 1, healthy: false, version: '1.1.0' });
   });
 
   it('rejects a core whose shellAbi differs', () => {
@@ -167,10 +173,11 @@ describe('resolveCore', () => {
     const core = resolve();
     expect(core.source).toBe('external');
     expect(core.manifest.version).toBe('1.0.5');
-    expect(readBoot()).toEqual({ failures: 1, version: '1.0.5' });
+    expect(readBoot()).toEqual({ failures: 1, healthy: false, version: '1.0.5' });
     expect(readPointer()).toEqual({
       abi: ABI,
       blacklist: ['1.1.0'],
+      channel: null,
       current: '1.0.5',
       previous: null,
       staged: null,
@@ -185,6 +192,7 @@ describe('resolveCore', () => {
     expect(readPointer()).toEqual({
       abi: ABI,
       blacklist: ['1.1.0'],
+      channel: null,
       current: null,
       previous: null,
       staged: null,
@@ -212,6 +220,7 @@ describe('resolveCore', () => {
     expect(readPointer()).toEqual({
       abi: ABI,
       blacklist: ['1.1.0'],
+      channel: null,
       current: null,
       previous: null,
       staged: null,
@@ -235,10 +244,11 @@ describe('resolveCore', () => {
     const core = resolve();
     expect(core.source).toBe('external');
     expect(core.manifest.version).toBe('1.2.0');
-    expect(readBoot()).toEqual({ failures: 1, version: '1.2.0' });
+    expect(readBoot()).toEqual({ failures: 1, healthy: false, version: '1.2.0' });
     expect(readPointer()).toEqual({
       abi: ABI,
       blacklist: [],
+      channel: null,
       current: '1.2.0',
       previous: '1.1.0',
       staged: null,
@@ -263,6 +273,23 @@ describe('resolveCore', () => {
     writeExternal('2.0.0-core.6', { seq: 6 });
     writePointer({ current: '2.0.0-core.6' });
     expect(resolve().manifest.version).toBe('2.0.0-core.6');
+  });
+
+  it('drops an external core from another channel than the pointer names', () => {
+    writeCore(builtinDir, '2.0.0', { channel: 'stable', seq: 5 });
+    writeExternal('1.1.0', { channel: 'canary', seq: 300 });
+    writePointer({ channel: 'stable', current: '1.1.0' });
+    const core = resolve();
+    expect(core.source).toBe('builtin');
+    expect(core.log).toContain('core 1.1.0 channel canary != stable');
+    expect(readPointer()).toMatchObject({ channel: 'stable', current: null, previous: null });
+  });
+
+  it('does not let a builtin from another channel supersede the selected channel core', () => {
+    writeCore(builtinDir, '2.0.0', { channel: 'stable', seq: 5 });
+    writeExternal('1.1.0', { channel: 'canary', seq: 3 });
+    writePointer({ channel: 'canary', current: '1.1.0' });
+    expect(resolve().manifest.version).toBe('1.1.0');
   });
 
   it('discards a staged core superseded by the builtin instead of promoting it', () => {
@@ -337,9 +364,11 @@ describe('resolveCore', () => {
     writePointer({ current: '1.1.0' });
     writeJson(path.join(otaRoot(), 'boot.json'), { failures: 2, version: '1.1.0' });
     const core = resolve();
-    expect(readBoot()).toEqual({ failures: 3, version: '1.1.0' });
+    expect(readBoot()).toEqual({ failures: 3, healthy: false, version: '1.1.0' });
     core.markHealthy();
-    expect(readBoot()).toEqual({ failures: 0, version: '1.1.0' });
+    expect(readBoot()).toEqual({ failures: 0, healthy: true, version: '1.1.0' });
+    resolve();
+    expect(readBoot()).toEqual({ failures: 1, healthy: true, version: '1.1.0' });
 
     expect(() =>
       resolveCore({

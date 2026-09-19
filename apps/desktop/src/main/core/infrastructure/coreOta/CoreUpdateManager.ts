@@ -147,7 +147,7 @@ export class CoreUpdateManager {
     );
     const abiChanged = readPointerAbi(this.otaRoot) !== this.shell!.abi;
     const stored = readPointer(this.otaRoot, this.shell!.abi);
-    this.pointer = this.reconcilePointer(stored);
+    this.pointer = { ...this.reconcilePointer(stored), channel: this.activeChannel };
     writePointer(this.otaRoot, this.pointer);
     logger.info('Core OTA boot state', this.pointer);
     this.gc(abiChanged);
@@ -175,7 +175,7 @@ export class CoreUpdateManager {
   private isFirstBootOfRunningCore() {
     try {
       const boot = JSON.parse(readFileSync(path.join(this.otaRoot, 'boot.json'), 'utf8'));
-      return boot?.version === this.runningVersion && boot?.failures === 1;
+      return boot?.version === this.runningVersion && boot?.healthy !== true;
     } catch {
       return false;
     }
@@ -199,11 +199,14 @@ export class CoreUpdateManager {
     if (!this.enabled) return;
     this.checkGeneration += 1;
     this.busy = false;
-    if (this.staged?.applyMode === 'relaunch') {
-      this.savePointer({ current: this.pointer.previous, previous: null });
-    }
+    this.savePointer({
+      channel: next,
+      staged: null,
+      ...(this.staged?.applyMode === 'relaunch'
+        ? { current: this.pointer.previous, previous: null }
+        : {}),
+    });
     this.staged = null;
-    if (this.pointer.staged) this.savePointer({ staged: null });
     this.gc();
     if (this.checkTimer || this.checkInterval) this.scheduleChecks();
   };
@@ -302,7 +305,8 @@ export class CoreUpdateManager {
       const { version } = remote;
       this.needsFullRelease = remote.shellAbi !== this.shell!.abi;
       if (this.needsFullRelease) throw new SkipCheck('needs-full-release');
-      if (remote.seq <= this.running.seq) throw new SkipCheck('up-to-date');
+      if (remote.channel === this.running.channel && remote.seq <= this.running.seq)
+        throw new SkipCheck('up-to-date');
       if (version === this.pointer.current) throw new SkipCheck('already-current');
       if (this.pointer.blacklist.includes(version)) throw new SkipCheck('blacklisted');
       if (!this.inRollout(version, remote.rollout)) throw new SkipCheck('rollout-excluded');

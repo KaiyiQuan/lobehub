@@ -158,6 +158,7 @@ const pointerAt = (patch: Partial<ReturnType<typeof readPointer>>) =>
   writePointer(otaRoot(), {
     abi: ABI,
     blacklist: [],
+    channel: 'stable',
     current: null,
     previous: null,
     staged: null,
@@ -231,6 +232,7 @@ describe('CoreUpdateManager initialize', () => {
     writePointer(otaRoot(), {
       abi: 'b'.repeat(64),
       blacklist: ['0.8.0'],
+      channel: 'stable',
       current: '0.9.0',
       previous: null,
       staged: null,
@@ -352,7 +354,7 @@ describe('CoreUpdateManager initialize', () => {
     it('does not arm on later boots of an already-confirmed version', async () => {
       vi.useFakeTimers();
       try {
-        const { manager } = await bootExternal({ failures: 0, version: '1.0.1' });
+        const { manager } = await bootExternal({ failures: 1, healthy: true, version: '1.0.1' });
         manager.startScheduledChecks();
 
         vi.advanceTimersByTime(120_000);
@@ -375,6 +377,27 @@ describe('CoreUpdateManager checkForUpdates', () => {
     expect(manager.getStatus().staged).toBeNull();
     expect(app.browserManager.broadcastToAllWindows).not.toHaveBeenCalled();
     expect(existsSync(coreDir('1.0.1'))).toBe(false);
+  });
+
+  it('stages a lower-seq core from the newly selected channel', async () => {
+    const canary = buildManifest('1.0.1', 0, BASE_FILES, { channel: 'canary' });
+    materialize(coreDir('1.0.1'), BASE_FILES, canary);
+    pointerAt({ channel: 'canary', current: '1.0.1' });
+    const { manager } = await loadManager(
+      makeApp(),
+      makeShell({
+        coreDir: coreDir('1.0.1'),
+        manifest: { ...canary, seq: 300 },
+        source: 'external',
+      }),
+    );
+    serveLatest(rendererOnly('1.0.2', 20));
+
+    manager.switchChannel('stable');
+    await manager.checkForUpdates();
+
+    expect(manager.getStatus().staged).toBe('1.0.2');
+    expect(readPointer(otaRoot(), ABI).channel).toBe('stable');
   });
 
   it('rejects a manifest with a bad signature', async () => {
@@ -535,6 +558,7 @@ describe('CoreUpdateManager checkForUpdates', () => {
     writePointer(otaRoot(), {
       abi: ABI,
       blacklist: [],
+      channel: 'stable',
       current: '1.0.1',
       previous: '0.9.5',
       staged: null,

@@ -93,6 +93,7 @@ function resolveCore({ userData, builtinDir, abi, publicKey }) {
       writeJson(pointerFile, {
         abi,
         blacklist,
+        channel: pointer.channel ?? null,
         current: pointer.current ?? null,
         previous: pointer.previous ?? null,
         staged: pointer.staged ?? null,
@@ -104,9 +105,21 @@ function resolveCore({ userData, builtinDir, abi, publicKey }) {
 
   const builtinManifest = readJson(path.join(builtinDir, 'manifest.json')) ?? null;
   const builtinSeq = typeof builtinManifest?.seq === 'number' ? builtinManifest.seq : null;
-  // A full release ships a builtin core with a seq above every published core; older external cores must not outlive it.
-  const superseded = (manifest) =>
-    builtinSeq !== null && typeof manifest.seq === 'number' && manifest.seq <= builtinSeq;
+  const channel = typeof pointer.channel === 'string' ? pointer.channel : builtinManifest?.channel;
+  // seq counters are per channel: a full release ships a builtin core with a seq above every
+  // published core of its own channel, so older external cores of that channel must not outlive it.
+  const rejectReason = (manifest) => {
+    if (channel && manifest.channel && manifest.channel !== channel)
+      return `channel ${manifest.channel} != ${channel}`;
+    if (
+      builtinSeq !== null &&
+      manifest.channel === builtinManifest.channel &&
+      typeof manifest.seq === 'number' &&
+      manifest.seq <= builtinSeq
+    )
+      return `seq ${manifest.seq} superseded by builtin seq ${builtinSeq}`;
+    return null;
+  };
 
   const verified = new Map();
   const verify = (version) => {
@@ -128,10 +141,9 @@ function resolveCore({ userData, builtinDir, abi, publicKey }) {
   if (pointer.staged) {
     try {
       const { manifest } = verify(pointer.staged);
-      if (superseded(manifest)) {
-        log.push(
-          `staged ${pointer.staged} seq ${manifest.seq} superseded by builtin seq ${builtinSeq}`,
-        );
+      const reason = rejectReason(manifest);
+      if (reason) {
+        log.push(`staged ${pointer.staged} ${reason}`);
         savePointer({ staged: null });
       } else {
         savePointer({ current: pointer.staged, previous: pointer.current ?? null, staged: null });
@@ -154,15 +166,17 @@ function resolveCore({ userData, builtinDir, abi, publicKey }) {
     }
     try {
       const { dir, manifest } = verify(version);
-      if (superseded(manifest)) {
-        log.push(`core ${version} seq ${manifest.seq} superseded by builtin seq ${builtinSeq}`);
+      const reason = rejectReason(manifest);
+      if (reason) {
+        log.push(`core ${version} ${reason}`);
         savePointer({ current: null, previous: null });
         break;
       }
-      writeJson(bootFile, { failures: failures + 1, version });
+      const healthy = boot.version === version && boot.healthy === true;
+      writeJson(bootFile, { failures: failures + 1, healthy, version });
       const markHealthy = () => {
         try {
-          writeJson(bootFile, { failures: 0, version });
+          writeJson(bootFile, { failures: 0, healthy: true, version });
         } catch (error) {
           log.push(`markHealthy failed: ${error.message}`);
         }

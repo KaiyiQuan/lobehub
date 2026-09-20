@@ -17,19 +17,30 @@ import { useQuickNoteStore } from '@/store/quickNote';
 export const useQuickNotePersistenceLifecycle = (): void => {
   const flushPendingWrites = useQuickNoteStore((state) => state.flushPendingWrites);
 
+  const setPollingActive = useQuickNoteStore((state) => state.setPollingActive);
+
   useEffect(() => {
     const flushWhenHidden = () => {
-      if (document.visibilityState === 'hidden') void flushPendingWrites();
+      const visible = document.visibilityState !== 'hidden';
+      setPollingActive(visible);
+      if (!visible) void flushPendingWrites();
     };
-    const flushOnPageHide = () => void flushPendingWrites();
+    const flushOnPageHide = () => {
+      setPollingActive(false);
+      void flushPendingWrites();
+    };
+    flushWhenHidden();
 
     document.addEventListener('visibilitychange', flushWhenHidden);
     window.addEventListener('pagehide', flushOnPageHide);
+    window.addEventListener('pageshow', flushWhenHidden);
 
     return () => {
       document.removeEventListener('visibilitychange', flushWhenHidden);
       window.removeEventListener('pagehide', flushOnPageHide);
+      window.removeEventListener('pageshow', flushWhenHidden);
+      setPollingActive(false);
       void flushPendingWrites();
     };
-  }, [flushPendingWrites]);
+  }, [flushPendingWrites, setPollingActive]);
 };

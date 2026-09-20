@@ -47,6 +47,10 @@ export class QuickNoteActionImpl {
   readonly #set: (state: Partial<QuickNoteStore>, replace?: false, action?: string) => void;
   readonly #rawSet: Setter;
   #disposed = false;
+  #pollingActive = true;
+  readonly #observedAnalyze = new Set<string>();
+  readonly #observedDive = new Set<string>();
+  readonly #pollFailures = new Map<string, number>();
   readonly #dirtyIds = new Set<string>();
   readonly #pendingEditorData = new Map<string, Record<string, unknown>>();
   readonly #analyzeTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -93,6 +97,30 @@ export class QuickNoteActionImpl {
       false,
       'resetQuickNoteStore',
     );
+  };
+
+  /**
+   * Suspends status reads while the Quick Note surface is inactive and resumes pending observations.
+   *
+   * Use when:
+   * - The note surface mounts, unmounts, or changes document visibility.
+   *
+   * Expects:
+   * - Persistence and server-side execution continue independently.
+   *
+   * Returns:
+   * - Nothing; suspended run observations are retained until resumption or reset.
+   */
+  setPollingActive = (active: boolean): void => {
+    if (this.#disposed) return;
+    this.#pollingActive = active;
+    for (const timers of [this.#analyzePollers, this.#divePollers]) {
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
+    }
+    if (!active) return;
+    for (const id of this.#observedAnalyze) this.#scheduleAnalyzePoll(id);
+    for (const id of this.#observedDive) this.#scheduleDivePoll(id);
   };
 
   initNotes = async () => {
@@ -309,6 +337,10 @@ export class QuickNoteActionImpl {
     this.#analyzeTimers.delete(id);
     this.#analyzePollers.delete(id);
     this.#divePollers.delete(id);
+    this.#observedAnalyze.delete(id);
+    this.#observedDive.delete(id);
+    this.#pollFailures.delete('analyze:' + id);
+    this.#pollFailures.delete('dive:' + id);
     this.#diveBaselineAnnotationTimes.delete(id);
     this.#diveTerminalReconcileAttempts.delete(id);
     this.#dirtyIds.delete(id);
@@ -573,81 +605,110 @@ export class QuickNoteActionImpl {
 
   #scheduleAnalyzePoll = (id: string) => {
     if (this.#disposed) return;
+    this.#observedAnalyze.add(id);
+    if (!this.#pollingActive) return;
     const existing = this.#analyzePollers.get(id);
     if (existing) clearTimeout(existing);
 
     this.#analyzePollers.set(
       id,
-      setTimeout(async () => {
-        this.#analyzePollers.delete(id);
-        try {
-          const notes = await this.#getPolledNotes();
-          const note = notes.find((item) => item.id === id);
-          const active =
-            note?.run?.kind === 'analyze' && ['pending', 'running'].includes(note.run.status);
+      setTimeout(
+        async () => {
+          this.#analyzePollers.delete(id);
+          try {
+            const notes = await this.#getPolledNotes();
+            const note = notes.find((item) => item.id === id);
+            this.#pollFailures.delete('analyze:' + id);
+            // The list exposes one active run; another kind can hide this run until it finishes.
+            const active = Boolean(note?.run && ['pending', 'running'].includes(note.run.status));
 
-          this.#set({ notes }, false, active ? 'analyze/poll' : 'analyze/done');
-          if (active) {
+            this.#set({ notes }, false, active ? 'analyze/poll' : 'analyze/done');
+            if (active) {
+              this.#scheduleAnalyzePoll(id);
+            } else {
+              this.#observedAnalyze.delete(id);
+              await this.refreshAgenticDetails(id);
+            }
+          } catch {
+            // Keep recovering background Analyze after a transient status request failure.
+            // Exponential delay caps outage traffic at one retry per 30 seconds for this observation.
+            this.#pollFailures.set(
+              'analyze:' + id,
+              (this.#pollFailures.get('analyze:' + id) ?? 0) + 1,
+            );
             this.#scheduleAnalyzePoll(id);
-          } else {
-            await this.refreshAgenticDetails(id);
           }
-        } catch {
-          // Keep recovering background Analyze after a transient status request failure.
-          this.#scheduleAnalyzePoll(id);
-        }
-      }, ANALYZE_POLL_INTERVAL),
+        },
+        Math.min(
+          30_000,
+          ANALYZE_POLL_INTERVAL * 2 ** Math.min(this.#pollFailures.get('analyze:' + id) ?? 0, 5),
+        ),
+      ),
     );
   };
 
   #scheduleDivePoll = (id: string) => {
     if (this.#disposed) return;
+    this.#observedDive.add(id);
+    if (!this.#pollingActive) return;
     const existing = this.#divePollers.get(id);
     if (existing) clearTimeout(existing);
 
     this.#divePollers.set(
       id,
-      setTimeout(async () => {
-        this.#divePollers.delete(id);
-        try {
-          const notes = await this.#getPolledNotes();
-          const note = notes.find((item) => item.id === id);
-          const active =
-            note?.run?.kind === 'dive' && ['pending', 'running'].includes(note.run.status);
-          const baselineAnnotationTime = this.#diveBaselineAnnotationTimes.get(id);
-          const reconcileAttempts = this.#diveTerminalReconcileAttempts.get(id) ?? 0;
-          const projectionPending =
-            Boolean(note) &&
-            !active &&
-            note?.annotation?.divedAt === baselineAnnotationTime &&
-            reconcileAttempts < DIVE_TERMINAL_RECONCILE_ATTEMPTS;
+      setTimeout(
+        async () => {
+          this.#divePollers.delete(id);
+          try {
+            const notes = await this.#getPolledNotes();
+            const note = notes.find((item) => item.id === id);
+            this.#pollFailures.delete('dive:' + id);
+            // The list exposes one active run; another kind can hide this run until it finishes.
+            const active = Boolean(note?.run && ['pending', 'running'].includes(note.run.status));
+            const baselineAnnotationTime = this.#diveBaselineAnnotationTimes.get(id);
+            const reconcileAttempts = this.#diveTerminalReconcileAttempts.get(id) ?? 0;
+            const projectionPending =
+              Boolean(note) &&
+              !active &&
+              note?.annotation?.divedAt === baselineAnnotationTime &&
+              reconcileAttempts < DIVE_TERMINAL_RECONCILE_ATTEMPTS;
 
-          if (projectionPending) {
-            this.#diveTerminalReconcileAttempts.set(id, reconcileAttempts + 1);
-          } else if (!active) {
-            this.#diveBaselineAnnotationTimes.delete(id);
-            this.#diveTerminalReconcileAttempts.delete(id);
+            if (projectionPending) {
+              this.#diveTerminalReconcileAttempts.set(id, reconcileAttempts + 1);
+            } else if (!active) {
+              this.#diveBaselineAnnotationTimes.delete(id);
+              this.#diveTerminalReconcileAttempts.delete(id);
+            }
+
+            this.#set(
+              {
+                divingNoteIds:
+                  active || projectionPending
+                    ? this.#get().divingNoteIds
+                    : this.#get().divingNoteIds.filter((item) => item !== id),
+                notes,
+              },
+              false,
+              active || projectionPending ? 'diveInto/poll' : 'diveInto/done',
+            );
+
+            if (active || projectionPending) this.#scheduleDivePoll(id);
+            else {
+              this.#observedDive.delete(id);
+              await this.refreshAgenticDetails(id);
+            }
+          } catch {
+            // Keep recovering the operation after a transient status request failure.
+            // Exponential delay caps outage traffic at one retry per 30 seconds for this observation.
+            this.#pollFailures.set('dive:' + id, (this.#pollFailures.get('dive:' + id) ?? 0) + 1);
+            this.#scheduleDivePoll(id);
           }
-
-          this.#set(
-            {
-              divingNoteIds:
-                active || projectionPending
-                  ? this.#get().divingNoteIds
-                  : this.#get().divingNoteIds.filter((item) => item !== id),
-              notes,
-            },
-            false,
-            active || projectionPending ? 'diveInto/poll' : 'diveInto/done',
-          );
-
-          if (active || projectionPending) this.#scheduleDivePoll(id);
-          else await this.refreshAgenticDetails(id);
-        } catch {
-          // Keep recovering the operation after a transient status request failure.
-          this.#scheduleDivePoll(id);
-        }
-      }, DIVE_POLL_INTERVAL),
+        },
+        Math.min(
+          30_000,
+          DIVE_POLL_INTERVAL * 2 ** Math.min(this.#pollFailures.get('dive:' + id) ?? 0, 5),
+        ),
+      ),
     );
   };
 }

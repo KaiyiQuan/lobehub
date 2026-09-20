@@ -142,6 +142,58 @@ describe('quickNote actions', () => {
     vi.restoreAllMocks();
   });
 
+  /** @example A different active kind must not terminate observation of a concurrent Dive. */
+  it('keeps observing Dive while Analyze occupies the run projection', async () => {
+    const note = createNoteItem({ content: 'source', run: { kind: 'dive', status: 'running' } });
+    const getNotes = vi.spyOn(quickNoteService, 'getNotes').mockResolvedValue([note]);
+    await useQuickNoteStore.getState().initNotes();
+    getNotes.mockResolvedValue([{ ...note, run: { kind: 'analyze', status: 'running' } }]);
+    await vi.advanceTimersByTimeAsync(6000);
+    /** @example More than three reconciliation attempts do not discard an active concurrent run. */
+    expect(useQuickNoteStore.getState().divingNoteIds).toContain(note.id);
+    getNotes.mockResolvedValue([note]);
+    await vi.advanceTimersByTimeAsync(1000);
+    /** @example Observation continues when Dive becomes the visible run again. */
+    expect(useQuickNoteStore.getState().divingNoteIds).toContain(note.id);
+    getNotes.mockResolvedValue([
+      {
+        ...note,
+        annotation: { content: 'completed annotation', divedAt: 9000 },
+        run: { kind: 'dive', status: 'completed' },
+      },
+    ]);
+    await vi.advanceTimersByTimeAsync(1000);
+    /** @example The eventual result is projected and the busy state clears. */
+    expect(useQuickNoteStore.getState().notes[0].annotation?.content).toBe('completed annotation');
+    expect(useQuickNoteStore.getState().divingNoteIds).not.toContain(note.id);
+  });
+
+  /** @example Outages progressively reduce full-list traffic. */
+  it('backs off consecutive polling failures', async () => {
+    const note = createNoteItem({ run: { kind: 'analyze', status: 'running' } });
+    const getNotes = vi.spyOn(quickNoteService, 'getNotes').mockResolvedValue([note]);
+    await useQuickNoteStore.getState().initNotes();
+    getNotes.mockRejectedValue(new Error('offline'));
+    await vi.advanceTimersByTimeAsync(15000);
+    /** @example Requests occur at 1, 3, 7 and 15 seconds, not every second. */
+    expect(getNotes).toHaveBeenCalledTimes(5);
+  });
+
+  /** @example Inactive surfaces suspend requests and resume their pending runs on return. */
+  it('pauses polling and resumes without losing the active run', async () => {
+    const note = createNoteItem({ run: { kind: 'dive', status: 'running' } });
+    const getNotes = vi.spyOn(quickNoteService, 'getNotes').mockResolvedValue([note]);
+    await useQuickNoteStore.getState().initNotes();
+    useQuickNoteStore.getState().setPollingActive(false);
+    await vi.advanceTimersByTimeAsync(60000);
+    /** @example No status requests are made while the surface is inactive. */
+    expect(getNotes).toHaveBeenCalledTimes(1);
+    useQuickNoteStore.getState().setPollingActive(true);
+    await vi.advanceTimersByTimeAsync(1000);
+    /** @example Returning resumes the existing run. */
+    expect(getNotes).toHaveBeenCalledTimes(2);
+  });
+
   /** @example Status polling preserves another note's unsaved editor projection. */
   it.each(['analyze', 'dive'] as const)('preserves pending edits while %s polls', async (kind) => {
     // ROOT CAUSE:

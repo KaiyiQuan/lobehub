@@ -369,12 +369,12 @@ export const isShareBlockedBuiltinDispatch = (
   if (!isShareToolApiGranted(resolveShareToolGrants(agentShare.toolGrants), identifier, apiName))
     return true;
 
-  // Sub-agent dispatch has no humanIntervention config to catch it, and the
-  // server sub-agent runner spawns the child via a plain `execAgent` call
-  // that does NOT thread the parent's shareGate — the child would run with
-  // the creator's full, unrestricted tool surface. Assembly strips the API
-  // (`stripSubAgentDispatchApis`); this is its dispatch-time counterpart.
-  if (SUB_AGENT_DISPATCH_APIS[identifier]?.apiName === apiName) return true;
+  // Sub-agent lifecycle APIs have no humanIntervention config to catch them.
+  // Dispatch can spawn a child with the creator's unrestricted tool surface,
+  // while inspection can expose the creator's preserved child-run messages.
+  // Assembly strips both (`stripShareVisitorBlockedSubAgentApis`); this is its
+  // dispatch-time counterpart.
+  if (SHARE_VISITOR_BLOCKED_SUB_AGENT_APIS[identifier]?.apiNames.includes(apiName)) return true;
 
   const manifest = builtinTools.find((tool) => tool.identifier === identifier)?.manifest;
   const toolLevelHumanIntervention = (manifest as { humanIntervention?: unknown } | undefined)
@@ -511,7 +511,7 @@ export const applyShareGateToToolSet = (toolSet: ShareGateToolSet, gate: AgentSh
     });
   }
 
-  stripSubAgentDispatchApis(toolSet);
+  stripShareVisitorBlockedSubAgentApis(toolSet);
   applyShareGateToDataToolAccess(toolSet, gate);
   applyShareGateToInterventionRequiredApis(toolSet);
   applyShareGateToPerApiGrants(toolSet, grants);
@@ -775,12 +775,12 @@ const applyShareGateToInterventionRequiredApis = (toolSet: ShareGateToolSet): vo
  */
 
 /**
- * Sub-agent dispatch is not available in shared visitor runs. This strip runs
+ * Sub-agent dispatch and run inspection are not available in shared visitor runs. This strip runs
  * unconditionally on `lobe-agent`, independent of whether the manifest was
  * resolved through the normal context-aware path, so a whitelisted entry can
- * never surface `callSubAgent` — nor a `systemRole` that instructs the model
- * to call it — to a share visitor's model or the activator. `lobe-agent`
- * already ships a precise systemRole variant without the dispatch section
+ * never surface `callSubAgent` or `getSubAgentRun` — nor a `systemRole` that
+ * instructs the model to call them — to a share visitor's model or the
+ * activator. `lobe-agent` already ships a precise systemRole variant without the dispatch section
  * (`systemPromptWithoutSubAgent`, also used by its own context-aware
  * `resolveManifest`).
  *
@@ -788,19 +788,19 @@ const applyShareGateToInterventionRequiredApis = (toolSet: ShareGateToolSet): vo
  * here: the whole tool — dispatch included — is simply absent from
  * `SHARE_VISITOR_ALLOWED_IDENTIFIERS`, so it never survives that gate.
  */
-const SUB_AGENT_DISPATCH_APIS: Record<
+const SHARE_VISITOR_BLOCKED_SUB_AGENT_APIS: Record<
   string,
-  { apiName: string; systemRoleWithoutDispatch: string }
+  { apiNames: string[]; systemRoleWithoutDispatch: string }
 > = {
   [LobeAgentIdentifier]: {
-    apiName: LobeAgentApiName.callSubAgent,
+    apiNames: [LobeAgentApiName.callSubAgent, LobeAgentApiName.getSubAgentRun],
     systemRoleWithoutDispatch: systemPromptWithoutSubAgent,
   },
 };
 
-const stripSubAgentDispatchApis = (toolSet: ShareGateToolSet): void => {
-  for (const [identifier, { apiName, systemRoleWithoutDispatch }] of Object.entries(
-    SUB_AGENT_DISPATCH_APIS,
+const stripShareVisitorBlockedSubAgentApis = (toolSet: ShareGateToolSet): void => {
+  for (const [identifier, { apiNames, systemRoleWithoutDispatch }] of Object.entries(
+    SHARE_VISITOR_BLOCKED_SUB_AGENT_APIS,
   )) {
     const manifest = toolSet.manifestMap[identifier];
     if (manifest) {
@@ -810,14 +810,16 @@ const stripSubAgentDispatchApis = (toolSet: ShareGateToolSet): void => {
       // still instructs the model to call the removed tool.
       toolSet.manifestMap[identifier] = {
         ...manifest,
-        api: manifest.api.filter((api) => api.name !== apiName),
+        api: manifest.api.filter((api) => !apiNames.includes(api.name)),
         systemRole: systemRoleWithoutDispatch,
       };
     }
 
     if (toolSet.tools) {
-      const dispatchToolName = `${identifier}${PLUGIN_SCHEMA_SEPARATOR}${apiName}`;
-      pruneArrayInPlace(toolSet.tools, (tool) => tool?.function?.name !== dispatchToolName);
+      const blockedToolNames = new Set(
+        apiNames.map((apiName) => `${identifier}${PLUGIN_SCHEMA_SEPARATOR}${apiName}`),
+      );
+      pruneArrayInPlace(toolSet.tools, (tool) => !blockedToolNames.has(tool?.function?.name));
     }
   }
 };

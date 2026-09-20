@@ -406,10 +406,14 @@ describe('applyShareGateToToolSet', () => {
     );
   });
 
-  it('strips callSubAgent and pins the dispatch-free systemRole', () => {
+  it('strips sub-agent lifecycle APIs and pins the dispatch-free systemRole', () => {
     const toolSet = buildToolSet([
       {
-        apis: [{ name: LobeAgentApiName.callSubAgent }, { name: LobeAgentApiName.analyzeMedia }],
+        apis: [
+          { name: LobeAgentApiName.callSubAgent },
+          { name: LobeAgentApiName.getSubAgentRun },
+          { name: LobeAgentApiName.analyzeMedia },
+        ],
         identifier: LobeAgentIdentifier,
       },
     ]);
@@ -420,11 +424,11 @@ describe('applyShareGateToToolSet', () => {
     );
 
     const manifest = toolSet.manifestMap[LobeAgentIdentifier];
-    expect(manifest.api.map((api) => api.name)).not.toContain(LobeAgentApiName.callSubAgent);
+    expect(manifest.api.map((api) => api.name)).toEqual([LobeAgentApiName.analyzeMedia]);
     expect(manifest.systemRole).toBe(systemPromptWithoutSubAgent);
-    expect(toolSet.tools!.map((tool: any) => tool.function.name)).not.toContain(
-      toolName(LobeAgentIdentifier, LobeAgentApiName.callSubAgent),
-    );
+    expect(toolSet.tools!.map((tool: any) => tool.function.name)).toEqual([
+      toolName(LobeAgentIdentifier, LobeAgentApiName.analyzeMedia),
+    ]);
   });
 
   it('drops a memory tool without allowReadMemory and strips its writes with it', () => {
@@ -702,18 +706,16 @@ describe('isShareBlockedBuiltinDispatch', () => {
     }
   });
 
-  it('blocks sub-agent dispatch even on an enabled tool with no intervention config', () => {
-    // callSubAgent carries no humanIntervention, so neither the intervention
-    // check nor the data-tool rules would catch it — and the child run it
-    // spawns does not inherit the parent's shareGate. Must be blocked by its
-    // dedicated dispatch rule.
-    expect(
-      isShareBlockedBuiltinDispatch(
-        { toolGrants: [{ identifier: LobeAgentIdentifier }] },
-        LobeAgentIdentifier,
-        LobeAgentApiName.callSubAgent,
-      ),
-    ).toBe(true);
+  it('blocks sub-agent lifecycle APIs even on an enabled tool with no intervention config', () => {
+    for (const apiName of [LobeAgentApiName.callSubAgent, LobeAgentApiName.getSubAgentRun]) {
+      expect(
+        isShareBlockedBuiltinDispatch(
+          { toolGrants: [{ identifier: LobeAgentIdentifier }] },
+          LobeAgentIdentifier,
+          apiName,
+        ),
+      ).toBe(true);
+    }
   });
 
   it('still applies the data-tool rules after the enable check', () => {

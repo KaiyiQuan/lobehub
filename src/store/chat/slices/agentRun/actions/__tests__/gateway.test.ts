@@ -3037,8 +3037,64 @@ describe('GatewayActionImpl', () => {
       const action = new GatewayActionImpl(set as any, get, undefined);
       action.createClient = vi.fn(() => createMockClient());
 
-      return { action, captured, connectToGateway, internalDispatchTopic };
+      return {
+        action,
+        captured,
+        completeOperation,
+        connectToGateway,
+        internalDispatchTopic,
+        startOperation,
+      };
     }
+
+    // Regression: the status tray, the topic-list elapsed time and the stop
+    // button are all driven by this local operation, and creating it only after
+    // `refreshGatewayToken` resolved made them wait on a round trip that shares
+    // the batched tRPC lane — so switching into a topic whose run was plainly
+    // alive showed an idle composer for as long as the slowest procedure in that
+    // batch. The marker already proves the run exists; register off it at once.
+    it('registers the local operation before the token refresh resolves', async () => {
+      const { action, connectToGateway, startOperation } = createSeededReconnectHarness();
+      let releaseToken: (value: { token: string }) => void = () => {};
+      vi.mocked(aiAgentService.refreshGatewayToken).mockReturnValueOnce(
+        new Promise<{ token: string }>((resolve) => {
+          releaseToken = resolve;
+        }),
+      );
+
+      const pending = action.reconnectToGatewayOperation({
+        assistantMessageId: 'ast-1',
+        operationId: 'server-op-1',
+        topicId: 'topic-1',
+      });
+
+      // Synchronously after the call: the token request is still in flight.
+      expect(startOperation).toHaveBeenCalledTimes(1);
+      expect(connectToGateway).not.toHaveBeenCalled();
+
+      releaseToken({ token: 'fresh-token' });
+      await pending;
+
+      expect(connectToGateway).toHaveBeenCalled();
+    });
+
+    // The operation is created optimistically off the marker, so every bail-out
+    // has to retire it — otherwise a stale marker leaves the composer spinning
+    // on a run that nothing will ever settle.
+    it('retires the optimistic operation when refreshGatewayToken returns NOT_FOUND', async () => {
+      const { action, completeOperation } = createSeededReconnectHarness();
+      vi.mocked(aiAgentService.refreshGatewayToken).mockRejectedValueOnce({
+        data: { code: 'NOT_FOUND' },
+      });
+
+      await action.reconnectToGatewayOperation({
+        assistantMessageId: 'ast-1',
+        operationId: 'server-op-1',
+        topicId: 'topic-1',
+      });
+
+      expect(completeOperation).toHaveBeenCalledWith('gw-op-reconnect');
+    });
 
     // Regression: a stale local runningOperation fires a reconnect,
     // but the server already cleared its marker and answers refreshGatewayToken

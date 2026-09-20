@@ -1335,34 +1335,6 @@ export class GatewayActionImpl {
       ?.runningOperation?.operationId;
     if (topicCurrentOpId && topicCurrentOpId !== operationId) return;
 
-    // Get a fresh JWT token (original expired after 5 min). The server throws
-    // TRPCError NOT_FOUND when it has no running operation on this topic — our
-    // local marker is stale (e.g. an error run cleared the server marker but not
-    // the store). Clear it and bail silently so the reconnect SWR fetcher resolves
-    // and does not retry the 404 forever.
-    let token: string;
-    try {
-      // Share visitors have no owner-scoped access to `aiAgentService.refreshGatewayToken`
-      // (its TopicModel is scoped to the caller, and share topics belong to the
-      // creator) — see the param JSDoc above for why the visitor mirror is used instead.
-      ({ token } = agentShareId
-        ? await shareChatService.refreshGatewayToken(agentShareId, topicId)
-        : await aiAgentService.refreshGatewayToken(topicId));
-    } catch (error) {
-      if (isTrpcErrorCode(error, 'NOT_FOUND')) {
-        this.clearLocalRunningOperation({ operationId, topicId });
-        return;
-      }
-      throw error;
-    }
-
-    // Re-check after the async token refresh: a newer executeGatewayAgent call may have
-    // taken over for this topic while we were waiting. If so, bail to avoid a duplicate stream.
-    // (disconnectFromGateway on the stale op is a no-op here because we haven't connected yet.)
-    const topicOpIdAfterRefresh = topicSelectors.getTopicById(topicId)(this.#get())?.metadata
-      ?.runningOperation?.operationId;
-    if (topicOpIdAfterRefresh && topicOpIdAfterRefresh !== operationId) return;
-
     const agentId = params.agentId ?? this.#get().activeAgentId;
     // Carry agentShareId the same way executeGatewayAgent's execution context
     // does — `createGatewayEventHandler` branches on `context.agentShareId` to
@@ -1403,8 +1375,16 @@ export class GatewayActionImpl {
 
     const startTime = [markerStartedAt, assistantMessageStart].find(Number.isFinite);
 
-    // Create a local operation for UI loading state, stashing the server op id
-    // so intervention flows can find it after reconnect as well.
+    // Create the local operation BEFORE the token refresh below. The marker this
+    // reconnect is acting on already proves the topic is running, and this
+    // operation is what every "a run is in flight" surface reads — the status
+    // tray, the topic-list elapsed time, the stop button. Creating it after the
+    // refresh made all of them wait on a round trip that shares the batched tRPC
+    // lane, where one slow sibling (a `device.*` git/quota hop to the user's own
+    // machine, up to its 15s server timeout) left an obviously-live run looking
+    // idle for seconds after every topic switch. Each bail-out below retires it.
+    // The server op id is stashed so intervention flows can find it after
+    // reconnect as well.
     const { operationId: gatewayOpId } = this.#get().startOperation({
       context,
       metadata: {
@@ -1431,6 +1411,42 @@ export class GatewayActionImpl {
 
       await interruptGatewayTaskOrThrow({ operationId });
     });
+
+    // Get a fresh JWT token (original expired after 5 min). The server throws
+    // TRPCError NOT_FOUND when it has no running operation on this topic — our
+    // local marker is stale (e.g. an error run cleared the server marker but not
+    // the store). Clear it and bail silently so the reconnect SWR fetcher resolves
+    // and does not retry the 404 forever.
+    let token: string;
+    try {
+      // Share visitors have no owner-scoped access to `aiAgentService.refreshGatewayToken`
+      // (its TopicModel is scoped to the caller, and share topics belong to the
+      // creator) — see the param JSDoc above for why the visitor mirror is used instead.
+      ({ token } = agentShareId
+        ? await shareChatService.refreshGatewayToken(agentShareId, topicId)
+        : await aiAgentService.refreshGatewayToken(topicId));
+    } catch (error) {
+      // The operation above was created on the strength of the marker; a refusal
+      // (or a transport failure SWR may retry) means no stream is coming, so
+      // retire it instead of leaving a spinner nothing will ever settle.
+      this.#get().completeOperation(gatewayOpId);
+
+      if (isTrpcErrorCode(error, 'NOT_FOUND')) {
+        this.clearLocalRunningOperation({ operationId, topicId });
+        return;
+      }
+      throw error;
+    }
+
+    // Re-check after the async token refresh: a newer executeGatewayAgent call may have
+    // taken over for this topic while we were waiting. If so, bail to avoid a duplicate stream.
+    // (disconnectFromGateway on the stale op is a no-op here because we haven't connected yet.)
+    const topicOpIdAfterRefresh = topicSelectors.getTopicById(topicId)(this.#get())?.metadata
+      ?.runningOperation?.operationId;
+    if (topicOpIdAfterRefresh && topicOpIdAfterRefresh !== operationId) {
+      this.#get().completeOperation(gatewayOpId);
+      return;
+    }
 
     const eventHandler = createGatewayEventHandler(this.#get, {
       assistantMessageId,

@@ -79,7 +79,8 @@ vi.mock('@/server/modules/ModelRuntime', () => ({
   initModelRuntimeFromDB: (...args: any[]) => mockInitModelRuntimeFromDB(...args),
 }));
 
-vi.mock('@lobechat/model-runtime', () => ({
+vi.mock('@lobechat/model-runtime', async (importOriginal) => ({
+  ...((await importOriginal()) as Record<string, unknown>),
   consumeStreamUntilDone: (...args: any[]) => mockConsumeStreamUntilDone(...args),
 }));
 
@@ -92,7 +93,8 @@ vi.mock('@/business/client/model-bank/loadModels', () => ({
   loadModels: vi.fn().mockResolvedValue(mockBuiltinModels),
 }));
 
-vi.mock('model-bank', () => ({
+vi.mock('model-bank', async (importOriginal) => ({
+  ...((await importOriginal()) as Record<string, unknown>),
   LOBE_DEFAULT_MODEL_LIST: mockBuiltinModels,
 }));
 
@@ -1013,12 +1015,129 @@ describe('lobeAgentRuntime', () => {
       ]);
     });
 
+    it('uses the thread id from the failed bridge output to inspect preserved work', async () => {
+      const { AgentRuntimeService } =
+        await import('@/server/services/agentRuntime/AgentRuntimeService');
+      const service = Object.create(AgentRuntimeService.prototype) as AgentRuntimeService;
+      const updateToolMessage = vi.fn().mockResolvedValue({ success: true });
+      (service as any).messageModel = { updateToolMessage };
+      (service as any).tryResumeParentFromAsyncTool = vi.fn().mockResolvedValue(true);
+
+      await service.completeSubAgentBridge({
+        finalState: {
+          error: { message: 'Budget exceeded' },
+          messages: [{ content: 'partial finding', role: 'assistant' }],
+          modelRuntimeConfig: { model: 'gpt-test' },
+          status: 'error',
+          usage: { llm: { tokens: { total: 5000 } }, tools: { totalCalls: 8 } },
+        } as any,
+        operationId: 'child-op-1',
+        parentOperationId: 'parent-op-1',
+        reason: 'error',
+        threadId: 'thread-from-bridge',
+        toolMessageId: 'tool-msg-1',
+      });
+
+      const failureContent = updateToolMessage.mock.calls[0][1].content as string;
+      const inspectedThreadId = failureContent.match(/threadId "([^"]+)"/)?.[1];
+      expect(failureContent).toContain('lobe-agent.getSubAgentRun');
+      expect(inspectedThreadId).toBe('thread-from-bridge');
+
+      mockThreadModelFindById.mockResolvedValue({
+        id: inspectedThreadId,
+        metadata: { error: { message: 'Budget exceeded' }, totalMessages: 1 },
+        sourceMessageId: 'tool-msg-1',
+        status: 'failed',
+        title: 'Research task',
+        topicId: 'topic-1',
+        type: 'isolation',
+      });
+      mockMessageModelQueryByIds.mockResolvedValue([sourceMessage]);
+      mockMessageModelQuery.mockResolvedValue([
+        {
+          content: 'partial finding',
+          id: 'assistant-1',
+          role: 'assistant',
+          threadId: inspectedThreadId,
+        },
+      ]);
+
+      const runtime = lobeAgentRuntime.factory({ ...baseContext, topicId: 'topic-1' });
+      const result = await runtime.getSubAgentRun({ threadId: inspectedThreadId! });
+
+      expect(result.success).toBe(true);
+      expect(JSON.parse(result.content)).toMatchObject({
+        messages: [{ content: 'partial finding', id: 'assistant-1', role: 'assistant' }],
+        run: { error: { message: 'Budget exceeded' }, status: 'failed' },
+        threadId: 'thread-from-bridge',
+      });
+    }, 15_000);
+
+    it('applies the default and maximum message limits', async () => {
+      mockThreadModelFindById.mockResolvedValue({
+        id: 'thread-1',
+        metadata: { totalMessages: 25 },
+        sourceMessageId: 'tool-msg-1',
+        status: 'failed',
+        title: 'Research task',
+        topicId: 'topic-1',
+        type: 'isolation',
+      });
+      mockMessageModelQueryByIds.mockResolvedValue([sourceMessage]);
+      mockMessageModelQuery.mockResolvedValue(
+        Array.from({ length: 25 }, (_, index) => ({
+          content: `message ${index + 1}`,
+          id: `message-${index + 1}`,
+          role: 'assistant',
+          threadId: 'thread-1',
+        })),
+      );
+      const runtime = lobeAgentRuntime.factory({ ...baseContext, topicId: 'topic-1' });
+
+      const defaultResult = await runtime.getSubAgentRun({ threadId: 'thread-1' });
+      const maximumResult = await runtime.getSubAgentRun({ limit: 100, threadId: 'thread-1' });
+
+      expect(JSON.parse(defaultResult.content).messages).toHaveLength(12);
+      expect(JSON.parse(maximumResult.content).messages).toHaveLength(20);
+    });
+
     it('rejects isolation threads outside the current topic', async () => {
       mockThreadModelFindById.mockResolvedValue({
         id: 'thread-1',
         sourceMessageId: 'tool-msg-1',
         topicId: 'topic-2',
         type: 'isolation',
+      });
+      const runtime = lobeAgentRuntime.factory({ ...baseContext, topicId: 'topic-1' });
+
+      const result = await runtime.getSubAgentRun({ threadId: 'thread-1' });
+
+      expect(result).toMatchObject({
+        error: { code: 'SUB_AGENT_RUN_NOT_FOUND' },
+        success: false,
+      });
+      expect(mockMessageModelQuery).not.toHaveBeenCalled();
+    });
+
+    it('rejects threads outside the current user scope', async () => {
+      mockThreadModelFindById.mockResolvedValue(undefined);
+      const runtime = lobeAgentRuntime.factory({ ...baseContext, topicId: 'topic-1' });
+
+      const result = await runtime.getSubAgentRun({ threadId: 'unowned-thread' });
+
+      expect(result).toMatchObject({
+        error: { code: 'SUB_AGENT_RUN_NOT_FOUND' },
+        success: false,
+      });
+      expect(mockMessageModelQuery).not.toHaveBeenCalled();
+    });
+
+    it('rejects ordinary non-isolation threads', async () => {
+      mockThreadModelFindById.mockResolvedValue({
+        id: 'thread-1',
+        sourceMessageId: 'tool-msg-1',
+        topicId: 'topic-1',
+        type: 'continuation',
       });
       const runtime = lobeAgentRuntime.factory({ ...baseContext, topicId: 'topic-1' });
 

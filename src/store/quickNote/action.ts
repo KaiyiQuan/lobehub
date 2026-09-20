@@ -504,6 +504,32 @@ export class QuickNoteActionImpl {
     );
   };
 
+  /** Fetches run metadata while preserving edits pending or made during the request. */
+  #getPolledNotes = async () => {
+    const before = new Map(this.#get().notes.map((note) => [note.id, note]));
+    const pending = new Set(this.#pendingEditorData.keys());
+    const notes = await quickNoteService.getNotes();
+    const current = new Map(this.#get().notes.map((note) => [note.id, note]));
+    return notes.map((note) => {
+      const local = current.get(note.id);
+      const original = before.get(note.id);
+      if (
+        !local ||
+        (!pending.has(note.id) &&
+          !this.#pendingEditorData.has(note.id) &&
+          local.content === original?.content &&
+          local.editorData === original?.editorData)
+      )
+        return note;
+      return {
+        ...note,
+        content: local.content,
+        editorData: local.editorData,
+        updatedAt: local.updatedAt,
+      };
+    });
+  };
+
   #scheduleAnalyzePoll = (id: string) => {
     const existing = this.#analyzePollers.get(id);
     if (existing) clearTimeout(existing);
@@ -513,7 +539,7 @@ export class QuickNoteActionImpl {
       setTimeout(async () => {
         this.#analyzePollers.delete(id);
         try {
-          const notes = await quickNoteService.getNotes();
+          const notes = await this.#getPolledNotes();
           const note = notes.find((item) => item.id === id);
           const active =
             note?.run?.kind === 'analyze' && ['pending', 'running'].includes(note.run.status);
@@ -541,7 +567,7 @@ export class QuickNoteActionImpl {
       setTimeout(async () => {
         this.#divePollers.delete(id);
         try {
-          const notes = await quickNoteService.getNotes();
+          const notes = await this.#getPolledNotes();
           const note = notes.find((item) => item.id === id);
           const active =
             note?.run?.kind === 'dive' && ['pending', 'running'].includes(note.run.status);
@@ -558,7 +584,6 @@ export class QuickNoteActionImpl {
           } else if (!active) {
             this.#diveBaselineAnnotationTimes.delete(id);
             this.#diveTerminalReconcileAttempts.delete(id);
-            await this.refreshAgenticDetails(id);
           }
 
           this.#set(
@@ -574,6 +599,7 @@ export class QuickNoteActionImpl {
           );
 
           if (active || projectionPending) this.#scheduleDivePoll(id);
+          else await this.refreshAgenticDetails(id);
         } catch {
           // Keep recovering the operation after a transient status request failure.
           this.#scheduleDivePoll(id);

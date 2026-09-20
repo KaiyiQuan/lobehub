@@ -1144,7 +1144,11 @@ export const sharedMainAreaChildren: RouteObject[] = [
           preloadId: 'note',
         }),
         handle: {
-          meta: routeMeta({ icon: NotebookPenIcon, titleKey: 'navigation.note' }),
+          meta: routeMeta({
+            Skeleton: createSurfaceSkeleton('list'),
+            icon: NotebookPenIcon,
+            titleKey: 'navigation.note',
+          }),
         },
         index: true,
       },
@@ -1154,7 +1158,11 @@ export const sharedMainAreaChildren: RouteObject[] = [
           'Desktop > Note > Detail',
         ),
         handle: {
-          meta: routeMeta({ icon: NotebookPenIcon, titleKey: 'navigation.note' }),
+          meta: routeMeta({
+            Skeleton: createSurfaceSkeleton('editor'),
+            icon: NotebookPenIcon,
+            titleKey: 'navigation.note',
+          }),
         },
         path: ':id',
       },

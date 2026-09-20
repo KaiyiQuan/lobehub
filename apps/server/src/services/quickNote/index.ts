@@ -248,13 +248,17 @@ export class QuickNoteProcessingService {
   dispatchAnalyzeRun = async (runId: string) => {
     const run = await this.model.getRunContext(runId);
     if (!run || run.kind !== 'analyze') return undefined;
+    if (run.operationId || run.status === 'running') return run;
+    if (run.status !== 'pending') return undefined;
     if (
       run.trigger === 'automatic' &&
       !(await QuickNoteModel.isAutomaticAnalyzeEnabled(this.db, this.userId))
     ) {
+      await this.model.failRun(runId, 'Automatic Analyze disabled before dispatch', {
+        onlyUndispatched: true,
+      });
       return undefined;
     }
-    if (run.operationId) return run;
 
     return this.executeAnalyze(runId);
   };

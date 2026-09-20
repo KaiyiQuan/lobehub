@@ -141,6 +141,59 @@ describe('quickNote actions', () => {
     vi.restoreAllMocks();
   });
 
+  /** @example Status polling preserves another note's unsaved editor projection. */
+  it.each(['analyze', 'dive'] as const)('preserves pending edits while %s polls', async (kind) => {
+    // ROOT CAUSE:
+    // Polling replaced all notes with server text before the debounce saved local editor JSON.
+    // Reconciliation must preserve pending edits on every note, not only the running note.
+    const running = createNoteItem({ id: 'polling', run: { kind, status: 'running' } });
+    const editing = createNoteItem({ id: 'editing', content: 'old', editorData: { revision: 0 } });
+    vi.spyOn(quickNoteService, 'getNotes').mockResolvedValue([running, editing]);
+    await useQuickNoteStore.getState().initNotes();
+    await vi.advanceTimersByTimeAsync(500);
+    useQuickNoteStore.getState().updateNoteContent('editing', 'new', { revision: 1 });
+    await vi.advanceTimersByTimeAsync(500);
+    /** @example The poll cannot combine old server text with the new editor payload. */
+    expect(useQuickNoteStore.getState().notes.find(({ id }) => id === 'editing')).toMatchObject({
+      content: 'new',
+      editorData: { revision: 1 },
+    });
+    await useQuickNoteStore.getState().flushPendingWrites();
+    /** @example Durable text and editor JSON describe the same revision. */
+    expect(quickNoteService.updateNoteContent).toHaveBeenCalledWith('editing', 'new', {
+      revision: 1,
+    });
+  });
+
+  /** @example A delayed poll cannot undo an edit acknowledged while the poll was in flight. */
+  it('preserves an acknowledged edit against an older in-flight poll response', async () => {
+    const note = createNoteItem({
+      id: 'late-poll',
+      content: 'old',
+      run: { kind: 'analyze', status: 'running' },
+    });
+    let resolvePoll!: (notes: QuickNoteItem[]) => void;
+    vi.spyOn(quickNoteService, 'getNotes')
+      .mockResolvedValueOnce([note])
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolvePoll = resolve;
+          }),
+      );
+    await useQuickNoteStore.getState().initNotes();
+    await vi.advanceTimersByTimeAsync(ANALYZE_POLL_INTERVAL);
+    useQuickNoteStore.getState().updateNoteContent(note.id, 'saved while polling', { revision: 2 });
+    await useQuickNoteStore.getState().flushPendingWrites();
+    resolvePoll([note]);
+    await vi.advanceTimersByTimeAsync(0);
+    /** @example An acknowledged local revision still wins over a stale request. */
+    expect(useQuickNoteStore.getState().notes[0]).toMatchObject({
+      content: 'saved while polling',
+      editorData: { revision: 2 },
+    });
+  });
+
   it('initNotes loads from the service only once', async () => {
     const seeded = [createNoteItem({ id: 'seeded' })];
     const getNotes = vi.spyOn(quickNoteService, 'getNotes').mockResolvedValue(seeded);

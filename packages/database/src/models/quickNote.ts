@@ -1587,14 +1587,27 @@ export class QuickNoteModel {
    * Returns:
    * - The failed Run, or `undefined` when inaccessible or already terminal.
    */
-  failRun = async (runId: string, error: string) => {
+  failRun = async (
+    runId: string,
+    error: string,
+    options?: {
+      /** Only release claims before dispatch has attached a thread or operation. @default false */
+      onlyUndispatched?: boolean;
+    },
+  ) => {
     const [run] = await this.db
       .update(quickNoteRuns)
       .set({ completedAt: new Date(), error, status: 'failed', updatedAt: new Date() })
       .where(
         and(
           eq(quickNoteRuns.id, runId),
-          inArray(quickNoteRuns.status, ['pending', 'running']),
+          options?.onlyUndispatched
+            ? and(
+                eq(quickNoteRuns.status, 'pending'),
+                isNull(quickNoteRuns.threadId),
+                isNull(quickNoteRuns.operationId),
+              )
+            : inArray(quickNoteRuns.status, ['pending', 'running']),
           inArray(
             quickNoteRuns.quickNoteId,
             this.db.select({ id: quickNotes.id }).from(quickNotes).where(this.ownershipWhere()),

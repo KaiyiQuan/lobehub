@@ -105,24 +105,31 @@ export const quickNoteRouter = router({
     const run = await model.claimRun(input.id, { kind: 'analyze', trigger: input.trigger });
     if (!run) throw new TRPCError({ code: 'NOT_FOUND', message: 'Quick Note not found' });
 
-    await enqueueAgentSignalSourceEvent(
-      {
-        payload: {
-          quickNoteId: run.quickNoteId,
-          runId: run.id,
-          sourceHistoryId: run.sourceHistoryId,
-          trigger: input.trigger,
-          userId: ctx.userId,
+    try {
+      await enqueueAgentSignalSourceEvent(
+        {
+          payload: {
+            quickNoteId: run.quickNoteId,
+            runId: run.id,
+            sourceHistoryId: run.sourceHistoryId,
+            trigger: input.trigger,
+            userId: ctx.userId,
+          },
+          scopeKey: `quick-note:${run.quickNoteId}`,
+          sourceId: run.id,
+          sourceType: AGENT_SIGNAL_SOURCE_TYPES.quickNoteAnalyzeRequested,
         },
-        scopeKey: `quick-note:${run.quickNoteId}`,
-        sourceId: run.id,
-        sourceType: AGENT_SIGNAL_SOURCE_TYPES.quickNoteAnalyzeRequested,
-      },
-      {
-        userId: ctx.userId,
-        workspaceId: ctx.workspaceId ?? undefined,
-      },
-    );
+        {
+          userId: ctx.userId,
+          workspaceId: ctx.workspaceId ?? undefined,
+        },
+      );
+    } catch (error) {
+      await model.failRun(run.id, 'Failed to enqueue Quick Note Analyze', {
+        onlyUndispatched: true,
+      });
+      throw error;
+    }
 
     return { accepted: true as const, run };
   }),

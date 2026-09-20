@@ -337,6 +337,11 @@ export interface BuiltinToolResolveContext {
   executionEnvUnroutedReason?:
     'ambiguous-online-devices' | 'bound-device-offline' | 'no-bound-device' | 'no-online-device';
   /**
+   * Runtime responsible for invoking builtin APIs in this turn. Client-only
+   * runs must not advertise APIs implemented exclusively by server runtimes.
+   */
+  executionRuntime?: 'client' | 'server';
+  /**
    * True when running inside a sub-agent execution. A nested sub-agent must not
    * be able to dispatch further sub-agents.
    */

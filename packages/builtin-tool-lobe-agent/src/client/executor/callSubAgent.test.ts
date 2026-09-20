@@ -1,3 +1,4 @@
+import { LobeAgentApiName } from '@lobechat/builtin-tool-lobe-agent';
 import type { BuiltinToolContext } from '@lobechat/types';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -15,6 +16,11 @@ const createContext = (run: ReturnType<typeof vi.fn>) =>
   ({ messageId: 'tool-msg-1', subAgent: { run } }) as unknown as BuiltinToolContext;
 
 describe('lobeAgentExecutor.callSubAgent', () => {
+  it('does not advertise the server-only run inspection API', () => {
+    expect(lobeAgentExecutor.hasApi(LobeAgentApiName.callSubAgent)).toBe(true);
+    expect(lobeAgentExecutor.hasApi(LobeAgentApiName.getSubAgentRun)).toBe(false);
+  });
+
   // A client sub-agent's own messages live in an isolation thread the parent never
   // loads, so this tool row's `state` is the ONLY place its spend reaches the
   // parent's usage tray. Persisting tokens but not cost / the token split makes a

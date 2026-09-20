@@ -1009,6 +1009,7 @@ export const discoverTools = async (
         executionEnv: executionPlanToManifestExecutionEnv(executionPlan, localDeviceId),
         executionEnvUnroutedReason:
           executionPlan.kind === 'device-unrouted' ? executionPlan.reason : undefined,
+        executionRuntime: 'server',
         isSubAgent: appContext?.isSubAgent,
         scope: appContext?.scope ?? undefined,
       },

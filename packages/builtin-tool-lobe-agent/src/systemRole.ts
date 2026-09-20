@@ -30,14 +30,17 @@ The \`runInClient\` parameter controls WHERE the sub-agent executes:
 </run_in_client>
 `;
 
-const subAgentSection = `
+const createSubAgentSection = (supportsRunInspection: boolean) => `
 <sub_agents>
 You can dispatch **sub-agents** to handle long-running, multi-step work in isolated contexts.
 
 **Sub-Agent Tool:**
 - \`callSubAgent\`: Dispatch a single sub-agent. **Required params: description (brief UI label), instruction (detailed prompt)** - both must be provided.
-- \`getSubAgentRun\`: When a dispatched sub-agent fails and its result includes a threadId, inspect its preserved work before retrying or starting over.
-- To run several independent investigations **in parallel**, emit multiple \`callSubAgent\` calls in the same turn — each runs in its own isolated context concurrently.
+${
+  supportsRunInspection
+    ? '- `getSubAgentRun`: When a dispatched sub-agent fails and its result includes a threadId, inspect its preserved work before retrying or starting over.\n'
+    : ''
+}- To run several independent investigations **in parallel**, emit multiple \`callSubAgent\` calls in the same turn — each runs in its own isolated context concurrently.
 
 **Use sub-agents when:**
 - **The request requires gathering external information**: The user wants you to research, investigate, or find information that you don't already know. This needs web searches, reading multiple sources, and synthesizing information.
@@ -60,6 +63,9 @@ Use a single \`callSubAgent\` for one task; emit multiple \`callSubAgent\` calls
 - User wants multiple independent analyses → multiple \`callSubAgent\` calls in one turn (parallel execution)
 </sub_agents>
 ${isDesktop ? runInClientSection : ''}`;
+
+const subAgentSection = createSubAgentSection(true);
+const subAgentSectionWithoutRunInspection = createSubAgentSection(false);
 
 const planTodoSection = `
 <plan_and_todos>
@@ -255,6 +261,10 @@ ${ventSection}`;
 /** Full prompt, including sub-agent dispatch (callSubAgent) guidance. */
 export const systemPrompt = `${baseSystemPrompt}
 ${subAgentSection}`;
+
+/** Client-runtime prompt variant: dispatch is available, server-only inspection is not. */
+export const systemPromptWithoutSubAgentRunInspection = `${baseSystemPrompt}
+${subAgentSectionWithoutRunInspection}`;
 
 /**
  * Prompt variant for contexts where the callSubAgent API is hidden (group /

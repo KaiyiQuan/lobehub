@@ -19,6 +19,12 @@ import {
   selectMediaFileItems,
   validateMediaUrls,
 } from '../../media';
+import {
+  type PlanDocument,
+  PlanExecutionRuntime,
+  type PlanRuntimeContext,
+  type PlanRuntimeService,
+} from '../../PlanRuntime';
 import type {
   AnalyzeMediaParams,
   AskUserQuestionArgs,
@@ -32,12 +38,6 @@ import type {
   VentState,
 } from '../../types';
 import { LobeAgentApiName, VENT_CATEGORIES, VENT_SEVERITIES } from '../../types';
-import {
-  type PlanDocument,
-  PlanExecutionRuntime,
-  type PlanRuntimeContext,
-  type PlanRuntimeService,
-} from '../../PlanRuntime';
 import { getTodosFromContext } from './planTodoHelper';
 import { resolveClientMediaPayloadItems } from './resolveMediaUris';
 
@@ -151,9 +151,15 @@ const nestedSubAgentDisabledResult = (): BuiltinToolResult => ({
   success: false,
 });
 
-class LobeAgentExecutor extends BaseExecutor<typeof LobeAgentApiName> {
+const LobeAgentClientApiName = Object.fromEntries(
+  Object.entries(LobeAgentApiName).filter(
+    ([, apiName]) => apiName !== LobeAgentApiName.getSubAgentRun,
+  ),
+) as Omit<typeof LobeAgentApiName, 'getSubAgentRun'>;
+
+class LobeAgentExecutor extends BaseExecutor<typeof LobeAgentClientApiName> {
   readonly identifier = LobeAgentManifest.identifier;
-  protected readonly apiEnum = LobeAgentApiName;
+  protected readonly apiEnum = LobeAgentClientApiName;
 
   private planRuntime = new PlanExecutionRuntime(clientPlanService);
 

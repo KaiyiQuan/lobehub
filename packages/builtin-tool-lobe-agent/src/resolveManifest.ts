@@ -1,7 +1,10 @@
 import type { BuiltinManifestResolver } from '@lobechat/types';
 
 import { LobeAgentManifest } from './manifest';
-import { systemPromptWithoutSubAgent } from './systemRole';
+import {
+  systemPromptWithoutSubAgent,
+  systemPromptWithoutSubAgentRunInspection,
+} from './systemRole';
 import { LobeAgentApiName } from './types';
 
 /**
@@ -15,18 +18,26 @@ import { LobeAgentApiName } from './types';
  *   sub-agent on top of that is redundant and confusing.
  * - **Inside a sub-agent** (`isSubAgent`): a nested sub-agent must not spawn
  *   further sub-agents.
+ * - **Inside the client runtime** (`executionRuntime` is `client`): dispatch is
+ *   implemented locally, but preserved-run inspection is server-only.
  *
- * In both cases plan / todo / media-analysis APIs stay available, so this returns a
- * trimmed manifest (not `null`). It rewrites BOTH halves of the manifest in step:
- * the `api` list drops `callSubAgent`, and `systemRole` switches to the variant
- * without the sub-agent section — otherwise the prompt would keep instructing the
- * model to dispatch a tool that is no longer in its tool list.
+ * Plan / todo / media-analysis APIs stay available in every trimmed variant. The
+ * resolver rewrites BOTH the API list and systemRole so the prompt never teaches
+ * an API that the selected runtime cannot invoke.
  */
 export const resolveLobeAgentManifest: BuiltinManifestResolver = (context) => {
   const inGroup = context.scope === 'group' || context.scope === 'group_agent';
   const hideSubAgentDispatch = inGroup || context.isSubAgent === true;
 
-  if (!hideSubAgentDispatch) return LobeAgentManifest;
+  if (!hideSubAgentDispatch && context.executionRuntime !== 'client') return LobeAgentManifest;
+
+  if (!hideSubAgentDispatch) {
+    return {
+      ...LobeAgentManifest,
+      api: LobeAgentManifest.api.filter((api) => api.name !== LobeAgentApiName.getSubAgentRun),
+      systemRole: systemPromptWithoutSubAgentRunInspection,
+    };
+  }
 
   return {
     ...LobeAgentManifest,

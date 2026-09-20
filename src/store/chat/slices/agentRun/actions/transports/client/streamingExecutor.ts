@@ -277,7 +277,12 @@ export class StreamingExecutorActionImpl {
       // Context-aware builtin manifests: lobe-agent hides callSubAgent in group /
       // sub-agent runs. Desktop client runs also need the local environment so
       // local-system can advertise IPC-only capabilities such as direct image reads.
-      { executionEnv: isDesktop ? 'local' : undefined, isSubAgent, scope },
+      {
+        executionEnv: isDesktop ? 'local' : undefined,
+        executionRuntime: 'client',
+        isSubAgent,
+        scope,
+      },
     );
     // When skillActivateMode is 'manual':
     // Exclude only discovery tools (activator, skill-store) so runtime-managed defaults

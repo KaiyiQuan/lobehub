@@ -9,7 +9,7 @@ const apiNames = (manifest: { api: { name: string }[] }) => manifest.api.map((a)
 
 describe('resolveLobeAgentManifest', () => {
   it('returns the full static manifest in a normal (main, non-sub-agent) turn', () => {
-    const result = resolveLobeAgentManifest({ scope: 'main' });
+    const result = resolveLobeAgentManifest({ executionRuntime: 'server', scope: 'main' });
 
     // identical reference — no trimming, no clone
     expect(result).toBe(LobeAgentManifest);
@@ -21,6 +21,26 @@ describe('resolveLobeAgentManifest', () => {
 
   it('returns the full manifest when no context signals are set', () => {
     expect(resolveLobeAgentManifest({})).toBe(LobeAgentManifest);
+  });
+
+  it('hides server-only run inspection from client execution while keeping dispatch', () => {
+    const result = resolveLobeAgentManifest({ executionRuntime: 'client', scope: 'main' })!;
+
+    expect(apiNames(result)).toContain(LobeAgentApiName.callSubAgent);
+    expect(apiNames(result)).not.toContain(LobeAgentApiName.getSubAgentRun);
+    expect(result.systemRole).toContain('callSubAgent');
+    expect(result.systemRole).not.toContain('getSubAgentRun');
+  });
+
+  it('keeps run inspection on server execution even when the environment is local', () => {
+    const result = resolveLobeAgentManifest({
+      executionEnv: 'local',
+      executionRuntime: 'server',
+      scope: 'main',
+    })!;
+
+    expect(apiNames(result)).toContain(LobeAgentApiName.getSubAgentRun);
+    expect(result.systemRole).toContain('getSubAgentRun');
   });
 
   it.each(['group', 'group_agent'])(

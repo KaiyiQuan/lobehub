@@ -60,6 +60,9 @@ describe('builtin executor registry', () => {
     await expect(hasExecutor(LobeAgentIdentifier, LobeAgentApiName.analyzeMedia)).resolves.toBe(
       true,
     );
+    await expect(hasExecutor(LobeAgentIdentifier, LobeAgentApiName.getSubAgentRun)).resolves.toBe(
+      false,
+    );
   }, 30_000);
 
   it('registers the hook-only Grok Build executor without exposing invokable APIs', async () => {

@@ -1325,6 +1325,98 @@ export class MessageModel {
   };
 
   /**
+   * Return a database-bounded snapshot of one thread without expanding every
+   * message group in its topic. Compression members collapse to their stored
+   * summary, while parallel-group members remain individual thread messages.
+   */
+  queryThreadSnapshot = async ({
+    limit,
+    threadId,
+    topicId,
+  }: {
+    limit: number;
+    threadId: string;
+    topicId: string;
+  }): Promise<{ hasMore: boolean; items: UIChatMessage[] }> => {
+    const rows = await this.db
+      .select({
+        id: messages.id,
+        messageGroupId: messages.messageGroupId,
+      })
+      .from(messages)
+      .where(and(this.ownership(), eq(messages.topicId, topicId), eq(messages.threadId, threadId)))
+      .orderBy(desc(messages.createdAt), desc(messages.id))
+      .limit(limit + 1);
+
+    const hasMore = rows.length > limit;
+    const boundedRows = rows.slice(0, limit);
+    const groupIds = [
+      ...new Set(
+        boundedRows
+          .map((message) => message.messageGroupId)
+          .filter((id): id is string => typeof id === 'string'),
+      ),
+    ];
+    const groups =
+      groupIds.length === 0
+        ? []
+        : await this.db
+            .select({
+              content: messageGroups.content,
+              createdAt: messageGroups.createdAt,
+              id: messageGroups.id,
+              topicId: messageGroups.topicId,
+              type: messageGroups.type,
+              updatedAt: messageGroups.updatedAt,
+            })
+            .from(messageGroups)
+            .where(
+              and(
+                buildWorkspaceWhere(
+                  { userId: this.userId, workspaceId: this.workspaceId },
+                  messageGroups,
+                ),
+                eq(messageGroups.topicId, topicId),
+                inArray(messageGroups.id, groupIds),
+              ),
+            );
+    const groupMap = new Map(groups.map((group) => [group.id, group]));
+    const rawMessageIds = boundedRows
+      .filter(
+        (message) =>
+          !message.messageGroupId ||
+          groupMap.get(message.messageGroupId)?.type !== MessageGroupType.Compression,
+      )
+      .map((message) => message.id);
+    const rawMessages = rawMessageIds.length === 0 ? [] : await this.queryByIds(rawMessageIds);
+    const messageMap = new Map(rawMessages.map((message) => [message.id, message]));
+    const emittedCompressionGroups = new Set<string>();
+    const items: UIChatMessage[] = [];
+
+    for (const row of boundedRows.reverse()) {
+      const group = row.messageGroupId ? groupMap.get(row.messageGroupId) : undefined;
+      if (group?.type === MessageGroupType.Compression) {
+        if (emittedCompressionGroups.has(group.id)) continue;
+        emittedCompressionGroups.add(group.id);
+        items.push({
+          content: group.content ?? '',
+          createdAt: group.createdAt,
+          id: group.id,
+          role: 'compressedGroup',
+          topicId: group.topicId,
+          updatedAt: group.updatedAt,
+        } as unknown as UIChatMessage);
+        continue;
+      }
+
+      const message = messageMap.get(row.id);
+      if (message) items.push(message);
+    }
+
+    return { hasMore, items };
+  };
+
+  /**
    * Lightweight parent/group links for the FULL message tree of a topic,
    * INCLUDING messages hidden inside MessageGroups (compression / parallel).
    *

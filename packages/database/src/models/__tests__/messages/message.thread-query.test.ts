@@ -1,8 +1,17 @@
+import { MessageGroupType } from '@lobechat/types';
 import { eq, sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { getTestDB } from '../../../core/getTestDB';
-import { agents, messages, sessions, threads, topics, users } from '../../../schemas';
+import {
+  agents,
+  messageGroups,
+  messages,
+  sessions,
+  threads,
+  topics,
+  users,
+} from '../../../schemas';
 import type { LobeChatDatabase } from '../../../type';
 import { MessageModel } from '../../message';
 
@@ -68,6 +77,130 @@ describe('MessageModel thread query', () => {
         topicId: 'topic1',
       }),
     ).resolves.toMatchObject({ id: 'owned-assistant' });
+  });
+
+  describe('queryThreadSnapshot', () => {
+    it('bounds the raw query while preserving compression summaries and parallel members', async () => {
+      await serverDB.insert(topics).values({ id: 'snapshot-topic', userId });
+      await serverDB.insert(threads).values([
+        {
+          id: 'snapshot-thread',
+          topicId: 'snapshot-topic',
+          type: 'isolation',
+          userId,
+        },
+        {
+          id: 'other-thread',
+          topicId: 'snapshot-topic',
+          type: 'isolation',
+          userId,
+        },
+      ]);
+      await serverDB.insert(messageGroups).values([
+        {
+          content: 'Compressed research findings',
+          createdAt: new Date('2026-07-20T00:01:00.000Z'),
+          id: 'snapshot-compression',
+          topicId: 'snapshot-topic',
+          type: MessageGroupType.Compression,
+          userId,
+        },
+        {
+          createdAt: new Date('2026-07-20T00:03:00.000Z'),
+          id: 'snapshot-parallel',
+          topicId: 'snapshot-topic',
+          type: MessageGroupType.Parallel,
+          userId,
+        },
+        {
+          content: 'Other thread summary',
+          createdAt: new Date('2026-07-20T00:06:00.000Z'),
+          id: 'other-compression',
+          topicId: 'snapshot-topic',
+          type: MessageGroupType.Compression,
+          userId,
+        },
+      ]);
+      await serverDB.insert(messages).values([
+        {
+          content: 'raw content replaced by summary',
+          createdAt: new Date('2026-07-20T00:00:00.000Z'),
+          id: 'snapshot-compressed-message',
+          messageGroupId: 'snapshot-compression',
+          role: 'assistant',
+          threadId: 'snapshot-thread',
+          topicId: 'snapshot-topic',
+          userId,
+        },
+        {
+          content: 'parallel finding A',
+          createdAt: new Date('2026-07-20T00:02:00.000Z'),
+          id: 'snapshot-parallel-a',
+          messageGroupId: 'snapshot-parallel',
+          role: 'assistant',
+          threadId: 'snapshot-thread',
+          topicId: 'snapshot-topic',
+          userId,
+        },
+        {
+          content: 'parallel finding B',
+          createdAt: new Date('2026-07-20T00:03:00.000Z'),
+          id: 'snapshot-parallel-b',
+          messageGroupId: 'snapshot-parallel',
+          role: 'assistant',
+          threadId: 'snapshot-thread',
+          topicId: 'snapshot-topic',
+          userId,
+        },
+        {
+          content: 'latest finding',
+          createdAt: new Date('2026-07-20T00:04:00.000Z'),
+          id: 'snapshot-latest',
+          role: 'assistant',
+          threadId: 'snapshot-thread',
+          topicId: 'snapshot-topic',
+          userId,
+        },
+        {
+          content: 'other thread content',
+          createdAt: new Date('2026-07-20T00:05:00.000Z'),
+          id: 'other-compressed-message',
+          messageGroupId: 'other-compression',
+          role: 'assistant',
+          threadId: 'other-thread',
+          topicId: 'snapshot-topic',
+          userId,
+        },
+      ]);
+
+      const complete = await messageModel.queryThreadSnapshot({
+        limit: 10,
+        threadId: 'snapshot-thread',
+        topicId: 'snapshot-topic',
+      });
+      expect(complete.hasMore).toBe(false);
+      expect(complete.items.map(({ content, id, role }) => ({ content, id, role }))).toEqual([
+        {
+          content: 'Compressed research findings',
+          id: 'snapshot-compression',
+          role: 'compressedGroup',
+        },
+        { content: 'parallel finding A', id: 'snapshot-parallel-a', role: 'assistant' },
+        { content: 'parallel finding B', id: 'snapshot-parallel-b', role: 'assistant' },
+        { content: 'latest finding', id: 'snapshot-latest', role: 'assistant' },
+      ]);
+
+      const bounded = await messageModel.queryThreadSnapshot({
+        limit: 2,
+        threadId: 'snapshot-thread',
+        topicId: 'snapshot-topic',
+      });
+      expect(bounded.hasMore).toBe(true);
+      expect(bounded.items.map((message) => message.id)).toEqual([
+        'snapshot-parallel-b',
+        'snapshot-latest',
+      ]);
+    });
   });
 
   describe('query with threadId - complete thread data', () => {

@@ -25,7 +25,7 @@ import { UserInteractionExecutionRuntime } from '@lobechat/builtin-tool-user-int
 import type { LobeChatDatabase } from '@lobechat/database';
 import type { ChatStreamPayload } from '@lobechat/model-runtime';
 import { consumeStreamUntilDone } from '@lobechat/model-runtime';
-import type { BuiltinServerRuntimeOutput, UIChatMessage } from '@lobechat/types';
+import type { BuiltinServerRuntimeOutput } from '@lobechat/types';
 import { RequestTrigger, ThreadType } from '@lobechat/types';
 import { nanoid } from '@lobechat/utils';
 import { parseDataUri } from '@lobechat/utils/uriParser';
@@ -73,21 +73,6 @@ const formatInspectableError = (error: unknown): Record<string, unknown> | strin
     else if (typeof value === 'number') result[key] = value;
   }
   return Object.keys(result).length > 0 ? result : undefined;
-};
-
-/** Preserve a compression summary when any nested source message belongs to the child run. */
-const containsSubAgentThreadMessage = (value: unknown, threadId: string): boolean => {
-  if (Array.isArray(value)) {
-    return value.some((item) => containsSubAgentThreadMessage(item, threadId));
-  }
-  if (!value || typeof value !== 'object') return false;
-
-  const node = value as Record<string, unknown>;
-  if (node.threadId === threadId) return true;
-
-  return ['compressedMessages', 'children', 'columns', 'members'].some((key) =>
-    containsSubAgentThreadMessage(node[key], threadId),
-  );
 };
 
 interface LobeAgentRuntimeContext {
@@ -351,32 +336,28 @@ class LobeAgentExecutionRuntime {
       ? Math.trunc(params.limit as number)
       : DEFAULT_SUB_AGENT_MESSAGE_LIMIT;
     const limit = Math.min(MAX_SUB_AGENT_MESSAGE_LIMIT, Math.max(1, requestedLimit));
-    const queriedMessages = await messageModel.query({
-      pageSize: SUB_AGENT_MESSAGE_QUERY_SIZE,
-      skipWorks: true,
+    const snapshot = await messageModel.queryThreadSnapshot({
+      limit: SUB_AGENT_MESSAGE_QUERY_SIZE,
       threadId: thread.id,
       topicId: this.topicId,
     });
-    const threadMessages = queriedMessages
-      .filter((message: UIChatMessage) => containsSubAgentThreadMessage(message, thread.id))
-      .slice(-limit)
-      .map((message) => {
-        const error = formatInspectableError(message.pluginError ?? message.error);
-        const tool = message.plugin?.identifier
-          ? {
-              apiName: message.plugin.apiName ?? undefined,
-              identifier: message.plugin.identifier,
-            }
-          : undefined;
+    const threadMessages = snapshot.items.slice(-limit).map((message) => {
+      const error = formatInspectableError(message.pluginError ?? message.error);
+      const tool = message.plugin?.identifier
+        ? {
+            apiName: message.plugin.apiName ?? undefined,
+            identifier: message.plugin.identifier,
+          }
+        : undefined;
 
-        return {
-          content: truncateSubAgentMessageContent(message.content),
-          ...(error && { error }),
-          id: message.id,
-          role: message.role,
-          ...(tool && { tool }),
-        };
-      });
+      return {
+        content: truncateSubAgentMessageContent(message.content),
+        ...(error && { error }),
+        id: message.id,
+        role: message.role,
+        ...(tool && { tool }),
+      };
+    });
     const metadata = thread.metadata ?? {};
     const sourceState = (sourceMessage.pluginState ?? {}) as Partial<CallSubAgentState>;
     const threadError = formatInspectableError(metadata.error);
@@ -389,7 +370,7 @@ class LobeAgentExecutionRuntime {
           hasMore:
             totalMessages !== undefined
               ? totalMessages > threadMessages.length
-              : queriedMessages.length >= SUB_AGENT_MESSAGE_QUERY_SIZE,
+              : snapshot.hasMore || snapshot.items.length > threadMessages.length,
           messages: threadMessages,
           run: {
             ...(metadata.completedAt && { completedAt: metadata.completedAt }),

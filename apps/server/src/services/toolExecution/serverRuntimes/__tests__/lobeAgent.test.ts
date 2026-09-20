@@ -12,6 +12,7 @@ const mockToolsEnv = vi.hoisted(() => ({
 }));
 const mockMessageModelQueryByIds = vi.hoisted(() => vi.fn());
 const mockMessageModelQuery = vi.hoisted(() => vi.fn());
+const mockMessageModelQueryThreadSnapshot = vi.hoisted(() => vi.fn());
 const mockThreadModelFindById = vi.hoisted(() => vi.fn());
 const mockChat = vi.hoisted(() => vi.fn());
 const mockInitModelRuntimeFromDB = vi.hoisted(() => vi.fn());
@@ -57,6 +58,7 @@ vi.mock('@/database/models/message', () => ({
     return {
       query: (...args: any[]) => mockMessageModelQuery(...args),
       queryByIds: (...args: any[]) => mockMessageModelQueryByIds(...args),
+      queryThreadSnapshot: (...args: any[]) => mockMessageModelQueryThreadSnapshot(...args),
     };
   }),
 }));
@@ -139,6 +141,7 @@ describe('lobeAgentRuntime', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockMessageModelQuery.mockResolvedValue([]);
+    mockMessageModelQueryThreadSnapshot.mockResolvedValue({ hasMore: false, items: [] });
     mockThreadModelFindById.mockResolvedValue(undefined);
     mockToolsEnv.MULTIMODAL_UNDERSTANDING_IMAGE_FORMATS = ['image/png', 'image/jpeg'];
     mockToolsEnv.MULTIMODAL_UNDERSTANDING_MODEL = 'vision-model';
@@ -963,27 +966,33 @@ describe('lobeAgentRuntime', () => {
         type: 'isolation',
       });
       mockMessageModelQueryByIds.mockResolvedValue([sourceMessage]);
-      mockMessageModelQuery.mockResolvedValue([
-        { content: 'parent', id: 'parent-1', role: 'user', threadId: null },
-        { content: 'partial finding', id: 'assistant-1', role: 'assistant', threadId: 'thread-1' },
-        {
-          content: 'tool output',
-          id: 'tool-1',
-          plugin: { apiName: 'search', identifier: 'web' },
-          pluginError: { message: 'rate limited' },
-          role: 'tool',
-          threadId: 'thread-1',
-        },
-      ]);
+      mockMessageModelQueryThreadSnapshot.mockResolvedValue({
+        hasMore: true,
+        items: [
+          {
+            content: 'partial finding',
+            id: 'assistant-1',
+            role: 'assistant',
+            threadId: 'thread-1',
+          },
+          {
+            content: 'tool output',
+            id: 'tool-1',
+            plugin: { apiName: 'search', identifier: 'web' },
+            pluginError: { message: 'rate limited' },
+            role: 'tool',
+            threadId: 'thread-1',
+          },
+        ],
+      });
       const runtime = lobeAgentRuntime.factory({ ...baseContext, topicId: 'topic-1' });
 
       const result = await runtime.getSubAgentRun({ limit: 2, threadId: 'thread-1' });
       const content = JSON.parse(result.content);
 
       expect(result.success).toBe(true);
-      expect(mockMessageModelQuery).toHaveBeenCalledWith({
-        pageSize: 60,
-        skipWorks: true,
+      expect(mockMessageModelQueryThreadSnapshot).toHaveBeenCalledWith({
+        limit: 60,
         threadId: 'thread-1',
         topicId: 'topic-1',
       });
@@ -1053,14 +1062,17 @@ describe('lobeAgentRuntime', () => {
         type: 'isolation',
       });
       mockMessageModelQueryByIds.mockResolvedValue([sourceMessage]);
-      mockMessageModelQuery.mockResolvedValue([
-        {
-          content: 'partial finding',
-          id: 'assistant-1',
-          role: 'assistant',
-          threadId: inspectedThreadId,
-        },
-      ]);
+      mockMessageModelQueryThreadSnapshot.mockResolvedValue({
+        hasMore: false,
+        items: [
+          {
+            content: 'partial finding',
+            id: 'assistant-1',
+            role: 'assistant',
+            threadId: inspectedThreadId,
+          },
+        ],
+      });
 
       const runtime = lobeAgentRuntime.factory({ ...baseContext, topicId: 'topic-1' });
       const result = await runtime.getSubAgentRun({ threadId: inspectedThreadId! });
@@ -1084,14 +1096,15 @@ describe('lobeAgentRuntime', () => {
         type: 'isolation',
       });
       mockMessageModelQueryByIds.mockResolvedValue([sourceMessage]);
-      mockMessageModelQuery.mockResolvedValue(
-        Array.from({ length: 25 }, (_, index) => ({
+      mockMessageModelQueryThreadSnapshot.mockResolvedValue({
+        hasMore: false,
+        items: Array.from({ length: 25 }, (_, index) => ({
           content: `message ${index + 1}`,
           id: `message-${index + 1}`,
           role: 'assistant',
           threadId: 'thread-1',
         })),
-      );
+      });
       const runtime = lobeAgentRuntime.factory({ ...baseContext, topicId: 'topic-1' });
 
       const defaultResult = await runtime.getSubAgentRun({ threadId: 'thread-1' });
@@ -1112,23 +1125,17 @@ describe('lobeAgentRuntime', () => {
         type: 'isolation',
       });
       mockMessageModelQueryByIds.mockResolvedValue([sourceMessage]);
-      mockMessageModelQuery.mockResolvedValue([
-        {
-          compressedMessages: [
-            { children: [{ id: 'assistant-1', threadId: 'thread-1' }], id: 'assistant-group' },
-          ],
-          content: 'Preserved findings from before compression',
-          id: 'compressed-thread-1',
-          role: 'compressedGroup',
-        },
-        {
-          compressedMessages: [{ id: 'other-1', threadId: 'thread-2' }],
-          content: 'Unrelated thread summary',
-          id: 'compressed-thread-2',
-          role: 'compressedGroup',
-        },
-        { content: 'latest finding', id: 'assistant-2', role: 'assistant', threadId: 'thread-1' },
-      ]);
+      mockMessageModelQueryThreadSnapshot.mockResolvedValue({
+        hasMore: false,
+        items: [
+          {
+            content: 'Preserved findings from before compression',
+            id: 'compressed-thread-1',
+            role: 'compressedGroup',
+          },
+          { content: 'latest finding', id: 'assistant-2', role: 'assistant', threadId: 'thread-1' },
+        ],
+      });
       const runtime = lobeAgentRuntime.factory({ ...baseContext, topicId: 'topic-1' });
 
       const result = await runtime.getSubAgentRun({ threadId: 'thread-1' });
@@ -1158,7 +1165,7 @@ describe('lobeAgentRuntime', () => {
         error: { code: 'SUB_AGENT_RUN_NOT_FOUND' },
         success: false,
       });
-      expect(mockMessageModelQuery).not.toHaveBeenCalled();
+      expect(mockMessageModelQueryThreadSnapshot).not.toHaveBeenCalled();
     });
 
     it('rejects threads outside the current user scope', async () => {
@@ -1171,7 +1178,7 @@ describe('lobeAgentRuntime', () => {
         error: { code: 'SUB_AGENT_RUN_NOT_FOUND' },
         success: false,
       });
-      expect(mockMessageModelQuery).not.toHaveBeenCalled();
+      expect(mockMessageModelQueryThreadSnapshot).not.toHaveBeenCalled();
     });
 
     it('rejects ordinary non-isolation threads', async () => {
@@ -1189,7 +1196,7 @@ describe('lobeAgentRuntime', () => {
         error: { code: 'SUB_AGENT_RUN_NOT_FOUND' },
         success: false,
       });
-      expect(mockMessageModelQuery).not.toHaveBeenCalled();
+      expect(mockMessageModelQueryThreadSnapshot).not.toHaveBeenCalled();
     });
 
     it('rejects isolation threads not created by callSubAgent', async () => {
@@ -1213,7 +1220,7 @@ describe('lobeAgentRuntime', () => {
         error: { code: 'SUB_AGENT_RUN_NOT_FOUND' },
         success: false,
       });
-      expect(mockMessageModelQuery).not.toHaveBeenCalled();
+      expect(mockMessageModelQueryThreadSnapshot).not.toHaveBeenCalled();
     });
 
     it('truncates oversized message content', async () => {
@@ -1227,9 +1234,10 @@ describe('lobeAgentRuntime', () => {
         type: 'isolation',
       });
       mockMessageModelQueryByIds.mockResolvedValue([sourceMessage]);
-      mockMessageModelQuery.mockResolvedValue([
-        { content: 'x'.repeat(2500), id: 'tool-1', role: 'tool', threadId: 'thread-1' },
-      ]);
+      mockMessageModelQueryThreadSnapshot.mockResolvedValue({
+        hasMore: false,
+        items: [{ content: 'x'.repeat(2500), id: 'tool-1', role: 'tool', threadId: 'thread-1' }],
+      });
       const runtime = lobeAgentRuntime.factory({ ...baseContext, topicId: 'topic-1' });
 
       const result = await runtime.getSubAgentRun({ threadId: 'thread-1' });

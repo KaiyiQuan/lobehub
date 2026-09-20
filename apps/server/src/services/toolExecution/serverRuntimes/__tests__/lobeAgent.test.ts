@@ -12,6 +12,7 @@ const mockToolsEnv = vi.hoisted(() => ({
 }));
 const mockMessageModelQueryByIds = vi.hoisted(() => vi.fn());
 const mockMessageModelQuery = vi.hoisted(() => vi.fn());
+const mockThreadModelFindById = vi.hoisted(() => vi.fn());
 const mockChat = vi.hoisted(() => vi.fn());
 const mockInitModelRuntimeFromDB = vi.hoisted(() => vi.fn());
 const mockConsumeStreamUntilDone = vi.hoisted(() => vi.fn());
@@ -57,6 +58,12 @@ vi.mock('@/database/models/message', () => ({
       query: (...args: any[]) => mockMessageModelQuery(...args),
       queryByIds: (...args: any[]) => mockMessageModelQueryByIds(...args),
     };
+  }),
+}));
+
+vi.mock('@/database/models/thread', () => ({
+  ThreadModel: vi.fn().mockImplementation(function () {
+    return { findById: (...args: any[]) => mockThreadModelFindById(...args) };
   }),
 }));
 
@@ -130,6 +137,7 @@ describe('lobeAgentRuntime', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockMessageModelQuery.mockResolvedValue([]);
+    mockThreadModelFindById.mockResolvedValue(undefined);
     mockToolsEnv.MULTIMODAL_UNDERSTANDING_IMAGE_FORMATS = ['image/png', 'image/jpeg'];
     mockToolsEnv.MULTIMODAL_UNDERSTANDING_MODEL = 'vision-model';
     mockToolsEnv.MULTIMODAL_UNDERSTANDING_PROVIDER = 'test-provider';
@@ -920,6 +928,154 @@ describe('lobeAgentRuntime', () => {
       expect(result.success).toBe(false);
       expect(result).toMatchObject({ error: { code: 'INVALID_ARGUMENTS' } });
       expect(run).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getSubAgentRun', () => {
+    const sourceMessage = {
+      id: 'tool-msg-1',
+      plugin: { apiName: 'callSubAgent', identifier: 'lobe-agent' },
+      pluginState: {
+        model: 'gpt-test',
+        totalCost: 1.25,
+        totalInputTokens: 4000,
+        totalOutputTokens: 1000,
+        totalTokens: 5000,
+        totalToolCalls: 8,
+      },
+      role: 'tool',
+      topicId: 'topic-1',
+    };
+
+    it('returns a bounded snapshot of preserved messages and run metadata', async () => {
+      mockThreadModelFindById.mockResolvedValue({
+        id: 'thread-1',
+        metadata: {
+          error: { message: 'Budget exceeded' },
+          totalMessages: 30,
+        },
+        sourceMessageId: 'tool-msg-1',
+        status: 'failed',
+        title: 'Research task',
+        topicId: 'topic-1',
+        type: 'isolation',
+      });
+      mockMessageModelQueryByIds.mockResolvedValue([sourceMessage]);
+      mockMessageModelQuery.mockResolvedValue([
+        { content: 'parent', id: 'parent-1', role: 'user', threadId: null },
+        { content: 'partial finding', id: 'assistant-1', role: 'assistant', threadId: 'thread-1' },
+        {
+          content: 'tool output',
+          id: 'tool-1',
+          plugin: { apiName: 'search', identifier: 'web' },
+          pluginError: { message: 'rate limited' },
+          role: 'tool',
+          threadId: 'thread-1',
+        },
+      ]);
+      const runtime = lobeAgentRuntime.factory({ ...baseContext, topicId: 'topic-1' });
+
+      const result = await runtime.getSubAgentRun({ limit: 2, threadId: 'thread-1' });
+      const content = JSON.parse(result.content);
+
+      expect(result.success).toBe(true);
+      expect(mockMessageModelQuery).toHaveBeenCalledWith({
+        pageSize: 60,
+        skipWorks: true,
+        threadId: 'thread-1',
+        topicId: 'topic-1',
+      });
+      expect(content).toMatchObject({
+        hasMore: true,
+        run: {
+          error: { message: 'Budget exceeded' },
+          model: 'gpt-test',
+          status: 'failed',
+          title: 'Research task',
+          totalCost: 1.25,
+          totalInputTokens: 4000,
+          totalMessages: 30,
+          totalOutputTokens: 1000,
+          totalTokens: 5000,
+          totalToolCalls: 8,
+        },
+        threadId: 'thread-1',
+      });
+      expect(content.messages).toEqual([
+        { content: 'partial finding', id: 'assistant-1', role: 'assistant' },
+        {
+          content: 'tool output',
+          error: { message: 'rate limited' },
+          id: 'tool-1',
+          role: 'tool',
+          tool: { apiName: 'search', identifier: 'web' },
+        },
+      ]);
+    });
+
+    it('rejects isolation threads outside the current topic', async () => {
+      mockThreadModelFindById.mockResolvedValue({
+        id: 'thread-1',
+        sourceMessageId: 'tool-msg-1',
+        topicId: 'topic-2',
+        type: 'isolation',
+      });
+      const runtime = lobeAgentRuntime.factory({ ...baseContext, topicId: 'topic-1' });
+
+      const result = await runtime.getSubAgentRun({ threadId: 'thread-1' });
+
+      expect(result).toMatchObject({
+        error: { code: 'SUB_AGENT_RUN_NOT_FOUND' },
+        success: false,
+      });
+      expect(mockMessageModelQuery).not.toHaveBeenCalled();
+    });
+
+    it('rejects isolation threads not created by callSubAgent', async () => {
+      mockThreadModelFindById.mockResolvedValue({
+        id: 'thread-1',
+        sourceMessageId: 'tool-msg-1',
+        topicId: 'topic-1',
+        type: 'isolation',
+      });
+      mockMessageModelQueryByIds.mockResolvedValue([
+        {
+          ...sourceMessage,
+          plugin: { apiName: 'executeTask', identifier: 'lobe-group-management' },
+        },
+      ]);
+      const runtime = lobeAgentRuntime.factory({ ...baseContext, topicId: 'topic-1' });
+
+      const result = await runtime.getSubAgentRun({ threadId: 'thread-1' });
+
+      expect(result).toMatchObject({
+        error: { code: 'SUB_AGENT_RUN_NOT_FOUND' },
+        success: false,
+      });
+      expect(mockMessageModelQuery).not.toHaveBeenCalled();
+    });
+
+    it('truncates oversized message content', async () => {
+      mockThreadModelFindById.mockResolvedValue({
+        id: 'thread-1',
+        metadata: {},
+        sourceMessageId: 'tool-msg-1',
+        status: 'failed',
+        title: 'Research task',
+        topicId: 'topic-1',
+        type: 'isolation',
+      });
+      mockMessageModelQueryByIds.mockResolvedValue([sourceMessage]);
+      mockMessageModelQuery.mockResolvedValue([
+        { content: 'x'.repeat(2500), id: 'tool-1', role: 'tool', threadId: 'thread-1' },
+      ]);
+      const runtime = lobeAgentRuntime.factory({ ...baseContext, topicId: 'topic-1' });
+
+      const result = await runtime.getSubAgentRun({ threadId: 'thread-1' });
+      const content = JSON.parse(result.content);
+
+      expect(content.messages[0].content).toHaveLength(2001);
+      expect(content.messages[0].content).toMatch(/…$/);
     });
   });
 

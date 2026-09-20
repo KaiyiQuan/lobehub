@@ -3454,7 +3454,8 @@ describe('AgentRuntimeService', () => {
       expect(updateToolMessage).toHaveBeenCalledWith(
         'tool-msg-1',
         expect.objectContaining({
-          content: 'Sub-agent did not complete (error): boom',
+          content:
+            'Sub-agent did not complete (error): boom\nPreserved work is available via lobe-agent.getSubAgentRun with threadId "thread-1".',
           pluginError: { message: 'boom' },
           pluginState: expect.objectContaining({ status: 'error' }),
         }),
@@ -3471,7 +3472,8 @@ describe('AgentRuntimeService', () => {
       expect(updateToolMessage).toHaveBeenCalledWith(
         'tool-msg-1',
         expect.objectContaining({
-          content: 'Sub-agent did not complete (error).',
+          content:
+            'Sub-agent did not complete (error).\nPreserved work is available via lobe-agent.getSubAgentRun with threadId "thread-1".',
           pluginState: expect.objectContaining({ status: 'error' }),
         }),
       );
@@ -3486,7 +3488,9 @@ describe('AgentRuntimeService', () => {
       });
 
       const call = updateToolMessage.mock.calls.at(-1)?.[1];
-      expect(call.content).toBe(`Sub-agent did not complete (error): ${'x'.repeat(300)}…`);
+      expect(call.content).toBe(
+        `Sub-agent did not complete (error): ${'x'.repeat(300)}…\nPreserved work is available via lobe-agent.getSubAgentRun with threadId "thread-1".`,
+      );
     });
 
     it('throws when the backfill reports success: false so the webhook path redelivers', async () => {

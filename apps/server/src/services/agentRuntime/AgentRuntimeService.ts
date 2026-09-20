@@ -3452,11 +3452,15 @@ export class AgentRuntimeService {
       }
     }
     const errorReason = failed ? formatSubAgentErrorReason(finalState?.error) : undefined;
-    const content = failed
+    const baseContent = failed
       ? errorReason
         ? `Sub-agent did not complete (${reason}): ${errorReason}`
         : `Sub-agent did not complete (${reason}).`
       : lastAssistantContent || 'Sub-agent completed without a textual answer.';
+    const content =
+      failed && threadId
+        ? `${baseContent}\nPreserved work is available via lobe-agent.getSubAgentRun with threadId "${threadId}".`
+        : baseContent;
 
     const backfill = await this.messageModel.updateToolMessage(toolMessageId, {
       content,

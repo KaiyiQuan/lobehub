@@ -269,6 +269,28 @@ export const LobeAgentManifest: BuiltinToolManifest = {
     },
     {
       description:
+        'Inspect a bounded snapshot of preserved messages and run metadata from a sub-agent previously dispatched in the current topic. Use this after callSubAgent reports a failure with a threadId, before deciding whether any work must be retried.',
+      name: LobeAgentApiName.getSubAgentRun,
+      parameters: {
+        additionalProperties: false,
+        properties: {
+          limit: {
+            description: 'Number of recent sub-agent messages to return. Defaults to 12.',
+            maximum: 20,
+            minimum: 1,
+            type: 'integer',
+          },
+          threadId: {
+            description: 'Isolation thread id returned by callSubAgent.',
+            type: 'string',
+          },
+        },
+        required: ['threadId'],
+        type: 'object',
+      },
+    },
+    {
+      description:
         'Privately report friction in your own working conditions to the platform builders when you are genuinely blocked — a missing tool, a parameter/schema mismatch, conflicting or wrong docs, anomalous platform behavior, or an environment limit causing repeated failure. Not user-facing; it only records the report and does not fix anything. Use sparingly: at most one vent per task, only for the single worst blocker.',
       name: LobeAgentApiName.vent,
       parameters: {

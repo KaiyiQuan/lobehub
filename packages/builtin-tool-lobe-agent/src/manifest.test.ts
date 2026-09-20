@@ -76,4 +76,14 @@ describe('LobeAgentManifest', () => {
     expect(ventApi!.description).toContain('at most one vent per task');
     expect(LobeAgentManifest.systemRole).toContain('<vent>');
   });
+
+  it('should expose a bounded sub-agent run inspection API', () => {
+    const api = LobeAgentManifest.api.find((item) => item.name === LobeAgentApiName.getSubAgentRun);
+
+    expect(api).toBeDefined();
+    expect(api!.parameters.required).toEqual(['threadId']);
+    expect(api!.parameters.properties.limit).toMatchObject({ maximum: 20, minimum: 1 });
+    expect(api!.description).toContain('preserved');
+    expect(LobeAgentManifest.systemRole).toContain('getSubAgentRun');
+  });
 });

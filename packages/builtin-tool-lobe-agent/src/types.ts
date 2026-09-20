@@ -7,6 +7,7 @@ export const LobeAgentApiName = {
   clearTodos: 'clearTodos',
   createPlan: 'createPlan',
   createTodos: 'createTodos',
+  getSubAgentRun: 'getSubAgentRun',
   updatePlan: 'updatePlan',
   updateTodos: 'updateTodos',
   vent: 'vent',
@@ -143,6 +144,14 @@ export interface CallSubAgentParams {
   instruction: string;
   runInClient?: boolean;
   timeout?: number;
+}
+
+/** Parameters for reading a bounded snapshot of a preserved sub-agent run. */
+export interface GetSubAgentRunParams {
+  /** Number of recent child-thread messages to return. */
+  limit?: number;
+  /** Isolation thread returned by callSubAgent. */
+  threadId: string;
 }
 
 /** Execution stats reported back by a finished sub-agent run. */

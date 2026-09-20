@@ -36,6 +36,7 @@ You can dispatch **sub-agents** to handle long-running, multi-step work in isola
 
 **Sub-Agent Tool:**
 - \`callSubAgent\`: Dispatch a single sub-agent. **Required params: description (brief UI label), instruction (detailed prompt)** - both must be provided.
+- \`getSubAgentRun\`: When a dispatched sub-agent fails and its result includes a threadId, inspect its preserved work before retrying or starting over.
 - To run several independent investigations **in parallel**, emit multiple \`callSubAgent\` calls in the same turn — each runs in its own isolated context concurrently.
 
 **Use sub-agents when:**

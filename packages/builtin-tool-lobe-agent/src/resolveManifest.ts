@@ -30,7 +30,10 @@ export const resolveLobeAgentManifest: BuiltinManifestResolver = (context) => {
 
   return {
     ...LobeAgentManifest,
-    api: LobeAgentManifest.api.filter((api) => api.name !== LobeAgentApiName.callSubAgent),
+    api: LobeAgentManifest.api.filter(
+      (api) =>
+        api.name !== LobeAgentApiName.callSubAgent && api.name !== LobeAgentApiName.getSubAgentRun,
+    ),
     systemRole: systemPromptWithoutSubAgent,
   };
 };

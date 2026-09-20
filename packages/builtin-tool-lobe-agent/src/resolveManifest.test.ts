@@ -14,6 +14,7 @@ describe('resolveLobeAgentManifest', () => {
     // identical reference — no trimming, no clone
     expect(result).toBe(LobeAgentManifest);
     expect(apiNames(result!)).toContain(LobeAgentApiName.callSubAgent);
+    expect(apiNames(result!)).toContain(LobeAgentApiName.getSubAgentRun);
     // full prompt still describes sub-agent dispatch
     expect(result!.systemRole).toContain('callSubAgent');
   });
@@ -23,18 +24,19 @@ describe('resolveLobeAgentManifest', () => {
   });
 
   it.each(['group', 'group_agent'])(
-    'hides callSubAgent in both api and systemRole (keeping plan/todo/visual) in scope %s',
+    'hides sub-agent APIs in both api and systemRole (keeping plan/todo/visual) in scope %s',
     (scope) => {
       const result = resolveLobeAgentManifest({ scope })!;
 
       const names = apiNames(result);
       expect(names).not.toContain(LobeAgentApiName.callSubAgent);
+      expect(names).not.toContain(LobeAgentApiName.getSubAgentRun);
       // the rest of lobe-agent stays available
       expect(names).toContain(LobeAgentApiName.createPlan);
       expect(names).toContain(LobeAgentApiName.createTodos);
       expect(names).toContain(LobeAgentApiName.analyzeMedia);
-      // exactly one API removed
-      expect(names).toHaveLength(LobeAgentManifest.api.length - 1);
+      // exactly two sub-agent APIs removed
+      expect(names).toHaveLength(LobeAgentManifest.api.length - 2);
 
       // systemRole is rewritten so the prompt no longer mentions the hidden tool
       expect(result.systemRole).toBe(systemPromptWithoutSubAgent);
@@ -52,6 +54,7 @@ describe('resolveLobeAgentManifest', () => {
     const result = resolveLobeAgentManifest({ isSubAgent: true, scope: 'main' })!;
 
     expect(apiNames(result)).not.toContain(LobeAgentApiName.callSubAgent);
+    expect(apiNames(result)).not.toContain(LobeAgentApiName.getSubAgentRun);
     expect(apiNames(result)).toContain(LobeAgentApiName.createPlan);
     expect(result.systemRole).not.toContain('callSubAgent');
   });

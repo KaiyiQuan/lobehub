@@ -1,6 +1,8 @@
 import type {
   AnalyzeMediaParams,
   CallSubAgentParams,
+  CallSubAgentState,
+  GetSubAgentRunParams,
   MediaFileItem,
   MediaSourceMessage,
   VentParams,
@@ -12,6 +14,7 @@ import {
   createUrlMediaFileItems,
   formatMediaUrlValidationError,
   hasAnalyzableMediaFiles,
+  LobeAgentApiName,
   LobeAgentIdentifier,
   normalizeAnalyzeMediaInput,
   selectMediaFileItems,
@@ -23,11 +26,12 @@ import type { LobeChatDatabase } from '@lobechat/database';
 import type { ChatStreamPayload } from '@lobechat/model-runtime';
 import { consumeStreamUntilDone } from '@lobechat/model-runtime';
 import type { BuiltinServerRuntimeOutput } from '@lobechat/types';
-import { RequestTrigger } from '@lobechat/types';
+import { RequestTrigger, ThreadType } from '@lobechat/types';
 import { nanoid } from '@lobechat/utils';
 import { parseDataUri } from '@lobechat/utils/uriParser';
 
 import { MessageModel } from '@/database/models/message';
+import { ThreadModel } from '@/database/models/thread';
 import { toolsEnv } from '@/envs/tools';
 import { initModelRuntimeFromDB } from '@/server/modules/ModelRuntime';
 import { FileService } from '@/server/services/file';
@@ -43,6 +47,33 @@ import type { ServerRuntimeRegistration } from './types';
 // per-scope rate limits. Module-scoped so the rate-limit state survives across
 // per-request runtime instances.
 const sharedVentService = createVentService({ nextToolCallId: () => nanoid() });
+
+const DEFAULT_SUB_AGENT_MESSAGE_LIMIT = 12;
+const MAX_SUB_AGENT_MESSAGE_LIMIT = 20;
+const MAX_SUB_AGENT_MESSAGE_CONTENT_LENGTH = 2000;
+const SUB_AGENT_MESSAGE_QUERY_SIZE = 60;
+
+const truncateSubAgentMessageContent = (content: unknown) => {
+  if (typeof content !== 'string') return '';
+  if (content.length <= MAX_SUB_AGENT_MESSAGE_CONTENT_LENGTH) return content;
+  return `${content.slice(0, MAX_SUB_AGENT_MESSAGE_CONTENT_LENGTH)}…`;
+};
+
+const formatInspectableError = (error: unknown): Record<string, unknown> | string | undefined => {
+  if (!error) return undefined;
+  if (typeof error === 'string') return truncateSubAgentMessageContent(error);
+  if (error instanceof Error) return { message: truncateSubAgentMessageContent(error.message) };
+  if (typeof error !== 'object') return truncateSubAgentMessageContent(String(error));
+
+  const source = error as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const key of ['code', 'message', 'name', 'status', 'type']) {
+    const value = source[key];
+    if (typeof value === 'string') result[key] = truncateSubAgentMessageContent(value);
+    else if (typeof value === 'number') result[key] = value;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+};
 
 interface LobeAgentRuntimeContext {
   agentId?: string | null;
@@ -138,6 +169,7 @@ class LobeAgentExecutionRuntime {
   private userId: string;
   private messageId: string;
   private operationId?: string;
+  private threadModel: ThreadModel;
   private threadId?: string | null;
   private topicId?: string;
   private planRuntime: PlanExecutionRuntime;
@@ -154,6 +186,7 @@ class LobeAgentExecutionRuntime {
     this.messageId = context.messageId;
     this.operationId = context.operationId;
     this.threadId = context.threadId;
+    this.threadModel = new ThreadModel(context.serverDB, context.userId, context.workspaceId);
     this.topicId = context.topicId;
     this.userId = context.userId;
     this.workspaceId = context.workspaceId;
@@ -260,6 +293,121 @@ class LobeAgentExecutionRuntime {
       // `toolMessageId` rides along so the runtime's pause chunk can tell the
       // client which row to fetch; the client never sees it as tool state.
       state: { status: 'pending', subOperationId, threadId, toolMessageId },
+      success: true,
+    };
+  };
+
+  /**
+   * Read a compact, ownership-scoped snapshot of a callSubAgent isolation thread.
+   * The source-message check prevents this API from becoming a generic thread reader.
+   */
+  getSubAgentRun = async (params: GetSubAgentRunParams): Promise<BuiltinServerRuntimeOutput> => {
+    if (!params.threadId || typeof params.threadId !== 'string') {
+      return buildError('threadId is required.', 'INVALID_ARGUMENTS');
+    }
+    if (!this.topicId) {
+      return buildError(
+        'Sub-agent run inspection requires a current topic.',
+        'SUB_AGENT_RUN_CONTEXT_UNAVAILABLE',
+      );
+    }
+
+    const thread = await this.threadModel.findById(params.threadId);
+    if (
+      !thread ||
+      thread.topicId !== this.topicId ||
+      thread.type !== ThreadType.Isolation ||
+      !thread.sourceMessageId
+    ) {
+      return buildError('Sub-agent run not found in the current topic.', 'SUB_AGENT_RUN_NOT_FOUND');
+    }
+
+    const messageModel = new MessageModel(this.db, this.userId, this.workspaceId);
+    const [sourceMessage] = await messageModel.queryByIds([thread.sourceMessageId]);
+    if (
+      sourceMessage?.topicId !== this.topicId ||
+      sourceMessage.plugin?.identifier !== LobeAgentIdentifier ||
+      sourceMessage.plugin?.apiName !== LobeAgentApiName.callSubAgent
+    ) {
+      return buildError('Sub-agent run not found in the current topic.', 'SUB_AGENT_RUN_NOT_FOUND');
+    }
+
+    const requestedLimit = Number.isFinite(params.limit)
+      ? Math.trunc(params.limit as number)
+      : DEFAULT_SUB_AGENT_MESSAGE_LIMIT;
+    const limit = Math.min(MAX_SUB_AGENT_MESSAGE_LIMIT, Math.max(1, requestedLimit));
+    const queriedMessages = await messageModel.query({
+      pageSize: SUB_AGENT_MESSAGE_QUERY_SIZE,
+      skipWorks: true,
+      threadId: thread.id,
+      topicId: this.topicId,
+    });
+    const threadMessages = queriedMessages
+      .filter((message) => message.threadId === thread.id)
+      .slice(-limit)
+      .map((message) => {
+        const error = formatInspectableError(message.pluginError ?? message.error);
+        const tool = message.plugin?.identifier
+          ? {
+              apiName: message.plugin.apiName ?? undefined,
+              identifier: message.plugin.identifier,
+            }
+          : undefined;
+
+        return {
+          content: truncateSubAgentMessageContent(message.content),
+          ...(error && { error }),
+          id: message.id,
+          role: message.role,
+          ...(tool && { tool }),
+        };
+      });
+    const metadata = thread.metadata ?? {};
+    const sourceState = (sourceMessage.pluginState ?? {}) as Partial<CallSubAgentState>;
+    const threadError = formatInspectableError(metadata.error);
+    const totalMessages =
+      typeof metadata.totalMessages === 'number' ? metadata.totalMessages : undefined;
+
+    return {
+      content: JSON.stringify(
+        {
+          hasMore:
+            totalMessages !== undefined
+              ? totalMessages > threadMessages.length
+              : queriedMessages.length >= SUB_AGENT_MESSAGE_QUERY_SIZE,
+          messages: threadMessages,
+          run: {
+            ...(metadata.completedAt && { completedAt: metadata.completedAt }),
+            ...(typeof metadata.duration === 'number' && { duration: metadata.duration }),
+            ...(threadError && { error: threadError }),
+            ...((sourceState.model ?? metadata.model) && {
+              model: sourceState.model ?? metadata.model,
+            }),
+            ...(metadata.startedAt && { startedAt: metadata.startedAt }),
+            status: thread.status,
+            title: thread.title,
+            ...(typeof (sourceState.totalCost ?? metadata.totalCost) === 'number' && {
+              totalCost: sourceState.totalCost ?? metadata.totalCost,
+            }),
+            ...(typeof sourceState.totalInputTokens === 'number' && {
+              totalInputTokens: sourceState.totalInputTokens,
+            }),
+            ...(totalMessages !== undefined && { totalMessages }),
+            ...(typeof sourceState.totalOutputTokens === 'number' && {
+              totalOutputTokens: sourceState.totalOutputTokens,
+            }),
+            ...(typeof (sourceState.totalTokens ?? metadata.totalTokens) === 'number' && {
+              totalTokens: sourceState.totalTokens ?? metadata.totalTokens,
+            }),
+            ...(typeof (sourceState.totalToolCalls ?? metadata.totalToolCalls) === 'number' && {
+              totalToolCalls: sourceState.totalToolCalls ?? metadata.totalToolCalls,
+            }),
+          },
+          threadId: thread.id,
+        },
+        null,
+        2,
+      ),
       success: true,
     };
   };

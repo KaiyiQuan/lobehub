@@ -736,6 +736,29 @@ describe('AgentSlice Actions', () => {
       expect(result.current.agentMap).toBe(prevAgentMap);
     });
 
+    it('replaces editorData when the patch explicitly sets it, including null', () => {
+      const { result } = renderHook(() => useAgentStore());
+
+      act(() => {
+        result.current.internal_dispatchAgentMap('agent-1', {
+          editorData: { root: { children: ['old'] } },
+          systemRole: 'old',
+        });
+      });
+
+      act(() => {
+        result.current.internal_dispatchAgentMap('agent-1', {
+          editorData: null,
+          systemRole: 'new',
+        } as any);
+      });
+
+      expect(result.current.agentMap['agent-1']).toEqual({
+        editorData: null,
+        systemRole: 'new',
+      });
+    });
+
     it('should drop a workingDirByDevice entry when patched with undefined', () => {
       const { result } = renderHook(() => useAgentStore());
 

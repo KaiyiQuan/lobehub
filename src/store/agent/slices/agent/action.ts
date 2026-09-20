@@ -636,6 +636,7 @@ export class AgentSliceActionImpl {
         // replaces it rather than merging — so mirror that here, or a trait the
         // user just cleared reappears until the next full fetch.
         if (Object.hasOwn(config, 'profile')) draft[id].profile = config.profile;
+        if (Object.hasOwn(config, 'editorData')) draft[id].editorData = config.editorData;
         // merge() can't drop keys; honor `undefined` as a per-device delete so
         // clearing a working directory takes effect optimistically.
         pruneWorkingDirByDeviceDeletes(draft[id].agencyConfig, config.agencyConfig);

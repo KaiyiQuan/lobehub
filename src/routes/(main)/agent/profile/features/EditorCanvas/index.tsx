@@ -116,6 +116,7 @@ const AgentEditorCanvas = memo<AgentEditorCanvasProps>(({ agentId }) => {
   const mentionOptions = useMentionOptions();
   const editor = useProfileStore((s) => s.editor);
   const handleContentChange = useProfileStore((s) => s.handleContentChange);
+  const discardPendingSaves = useProfileStore((s) => s.discardPendingSaves);
   const slashItems = useSlashItems();
 
   // Streaming state from AgentStore
@@ -409,6 +410,8 @@ const AgentEditorCanvas = memo<AgentEditorCanvasProps>(({ agentId }) => {
     const role = systemRole ?? '';
     if (lastSyncedRoleRef.current === role) return;
     lastSyncedRoleRef.current = role;
+    localEditRef.current = false;
+    discardPendingSaves(agentId);
 
     try {
       setProgrammaticDocument(editor, 'markdown', role, role);
@@ -416,7 +419,9 @@ const AgentEditorCanvas = memo<AgentEditorCanvasProps>(({ agentId }) => {
       // ignore
     }
   }, [
+    agentId,
     contentInit,
+    discardPendingSaves,
     editor,
     editorData,
     editorInit,

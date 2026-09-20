@@ -25,6 +25,32 @@ describe('agent profile store actions', () => {
     vi.useRealTimers();
   });
 
+  it('drops a queued autosave once an external prompt update discards it', async () => {
+    const profileStore = createStore({ editor });
+    const updateConfigById = vi.fn().mockResolvedValue(undefined);
+
+    profileStore.getState().handleContentChange('agent-a', updateConfigById);
+    profileStore.getState().discardPendingSaves('agent-a');
+
+    await vi.advanceTimersByTimeAsync(EDITOR_DEBOUNCE_TIME);
+    await profileStore.getState().flushSave();
+
+    expect(updateConfigById).not.toHaveBeenCalled();
+    expect(profileStore.getState().promptSaveStatus).toBe('idle');
+  });
+
+  it('does not write a stale autosave that already entered the queue', async () => {
+    const profileStore = createStore({ editor });
+    const updateConfigById = vi.fn().mockResolvedValue(undefined);
+
+    profileStore.getState().handleContentChange('agent-a', updateConfigById);
+    vi.advanceTimersByTime(EDITOR_DEBOUNCE_TIME);
+    profileStore.getState().discardPendingSaves('agent-a');
+    await profileStore.getState().flushSave();
+
+    expect(updateConfigById).not.toHaveBeenCalled();
+  });
+
   it('keeps trailing autosaves isolated by the agent being edited', async () => {
     const profileStore = createStore({ editor });
     const updateConfigById = vi.fn().mockResolvedValue(undefined);

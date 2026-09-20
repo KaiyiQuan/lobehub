@@ -24,6 +24,7 @@ export interface Action {
    * Append content to streaming buffer (called during streaming)
    */
   appendStreamingContent: (chunk: string) => void;
+  discardPendingSaves: (agentId?: string) => void;
   /**
    * Finalize streaming and save to config
    */
@@ -56,10 +57,13 @@ export const store: (initState?: Partial<State>) => StateCreator<Store> =
     // per agent.
     let saveQueue = Promise.resolve();
     let latestSaveRevision = 0;
+    const latestRevisionByAgent = new Map<string, number>();
     let failedSave: PendingSave | undefined;
 
     const createPendingSave = (pendingSave: Omit<PendingSave, 'revision'>): PendingSave => {
-      const nextSave = { ...pendingSave, revision: ++latestSaveRevision };
+      const revision = ++latestSaveRevision;
+      latestRevisionByAgent.set(pendingSave.agentId, revision);
+      const nextSave = { ...pendingSave, revision };
       failedSave = undefined;
       set({ promptSaveStatus: 'saving' });
       return nextSave;
@@ -68,6 +72,7 @@ export const store: (initState?: Partial<State>) => StateCreator<Store> =
     const enqueueSave = (pendingSave: PendingSave) => {
       const { agentId, payload, revision, updateConfigById } = pendingSave;
       saveQueue = saveQueue.then(async () => {
+        if (latestRevisionByAgent.get(agentId) !== revision) return;
         try {
           await updateConfigById(agentId, payload);
           if (revision === latestSaveRevision) {
@@ -109,6 +114,25 @@ export const store: (initState?: Partial<State>) => StateCreator<Store> =
     return {
       ...initialState,
       ...initState,
+
+      discardPendingSaves: (agentId) => {
+        latestSaveRevision += 1;
+        failedSave = undefined;
+        if (agentId) {
+          latestRevisionByAgent.set(agentId, latestSaveRevision);
+          debouncedSaveMap.get(agentId)?.cancel();
+        } else {
+          for (const id of new Set([...debouncedSaveMap.keys(), ...latestRevisionByAgent.keys()])) {
+            latestRevisionByAgent.set(id, latestSaveRevision);
+          }
+          for (const debouncedSave of debouncedSaveMap.values()) {
+            debouncedSave.cancel();
+          }
+        }
+        if (get().promptSaveStatus === 'saving') {
+          set({ promptSaveStatus: 'idle' });
+        }
+      },
 
       appendStreamingContent: (chunk) => {
         const currentContent = get().streamingContent || '';

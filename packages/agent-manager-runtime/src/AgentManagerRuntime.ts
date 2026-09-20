@@ -156,7 +156,7 @@ export class AgentManagerRuntime {
 
       const state = getAgentStoreState();
       const agentStore = getAgentStoreState();
-      const resultState: UpdateAgentConfigState = { success: true };
+      const resultState: UpdateAgentConfigState = { agentId, success: true };
       const contentParts: string[] = [];
 
       // Get current config for merging
@@ -594,6 +594,7 @@ export class AgentManagerRuntime {
       return {
         content,
         state: {
+          agentId,
           newPrompt: params.prompt,
           previousPrompt,
           success: true,

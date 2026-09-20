@@ -557,6 +557,7 @@ describe('AgentManagerRuntime', () => {
       expect(result.content).toContain('Successfully updated system prompt');
       expect(result.content).toContain('17 characters');
       expect(result.state).toMatchObject({
+        agentId: 'agent-id',
         newPrompt: 'New system prompt',
         previousPrompt: 'Previous prompt',
         success: true,

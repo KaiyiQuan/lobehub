@@ -34,6 +34,7 @@ const editor = {
 };
 
 const handleContentChange = vi.fn();
+const discardPendingSaves = vi.fn();
 const flushSave = vi.fn().mockResolvedValue(undefined);
 const retryPromptSave = vi.fn().mockResolvedValue(undefined);
 const setHasEdited = vi.fn();
@@ -64,6 +65,7 @@ const agentStoreMock = vi.hoisted(() => {
 const { state: agentStoreState } = agentStoreMock;
 const { updateAgentConfigById } = agentStoreState;
 const profileStoreState = {
+  discardPendingSaves,
   editor,
   flushSave,
   handleContentChange,
@@ -419,6 +421,33 @@ describe('Agent profile EditorCanvas', () => {
 
     act(() => editorProps.last?.onInit());
     await waitFor(() => expect(editor.setDocument).toHaveBeenCalledWith('json', agentBEditorData));
+  });
+
+  it('applies an Agent Builder updatePrompt that clears editorData onto the live editor', async () => {
+    permissionState.allowed = true;
+    const hydratedEditorData = { root: { children: ['hydrated'] } };
+    agentStoreState.agentMap = {
+      'agent-a': { editorData: hydratedEditorData, systemRole: 'old prompt' },
+    };
+
+    render(<EditorCanvas />);
+    act(() => editorProps.last?.onInit());
+    await waitFor(() =>
+      expect(editor.setDocument).toHaveBeenCalledWith('json', hydratedEditorData),
+    );
+    editor.setDocument.mockClear();
+
+    act(() => {
+      agentStoreState.agentMap = {
+        'agent-a': { systemRole: 'new prompt from Agent Builder' },
+      };
+      agentStoreMock.listeners.forEach((listener) => listener());
+    });
+
+    await waitFor(() =>
+      expect(editor.setDocument).toHaveBeenCalledWith('markdown', 'new prompt from Agent Builder'),
+    );
+    expect(discardPendingSaves).toHaveBeenCalledWith('agent-a');
   });
 
   it('replaces hydrated editor data with a later server config before local editing starts', async () => {

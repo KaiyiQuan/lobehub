@@ -1027,7 +1027,9 @@ describe('lobeAgentRuntime', () => {
     it('uses the thread id from the failed bridge output to inspect preserved work', async () => {
       const { AgentRuntimeService } =
         await import('@/server/services/agentRuntime/AgentRuntimeService');
-      const service = Object.create(AgentRuntimeService.prototype) as AgentRuntimeService;
+      const service = Object.create(AgentRuntimeService.prototype) as InstanceType<
+        typeof AgentRuntimeService
+      >;
       const updateToolMessage = vi.fn().mockResolvedValue({ success: true });
       (service as any).messageModel = { updateToolMessage };
       (service as any).tryResumeParentFromAsyncTool = vi.fn().mockResolvedValue(true);

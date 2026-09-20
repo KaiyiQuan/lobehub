@@ -172,6 +172,7 @@ export class QuickNoteActionImpl {
   createNote = async (content = '', editorData?: Record<string, unknown>): Promise<string> => {
     const note = await quickNoteService.createNote(content, editorData);
     this.#set({ notes: [note, ...this.#get().notes] }, false, 'createNote');
+    if (note.analyzeDueAt) this.#scheduleAnalyze(note.id, note.analyzeDueAt);
     return note.id;
   };
 
@@ -398,13 +399,18 @@ export class QuickNoteActionImpl {
       return;
     }
 
-    const scheduledAnalyze = this.#analyzeTimers.get(id);
-    if (scheduledAnalyze) clearTimeout(scheduledAnalyze);
+    const priorTimer = this.#analyzeTimers.get(id);
+    if (priorTimer) clearTimeout(priorTimer);
     this.#analyzeTimers.delete(id);
 
     // Manual Analyze must pin the editor revision visible when the user clicks the action.
     await this.#persist.flush();
     if (this.#disposed || this.#get().saveStatus === 'failed') return;
+
+    // Flushing persistence can schedule a fresh automatic timer for this same revision.
+    const scheduledAnalyze = this.#analyzeTimers.get(id);
+    if (scheduledAnalyze) clearTimeout(scheduledAnalyze);
+    this.#analyzeTimers.delete(id);
 
     this.#set(
       { analyzingNoteIds: [...this.#get().analyzingNoteIds, id] },
@@ -502,12 +508,8 @@ export class QuickNoteActionImpl {
 
   retrySave = () => {
     this.#set({ saveStatus: 'saving' }, false, 'retrySave');
-    for (const note of this.#get().notes) {
-      if (note.editorData) {
-        this.#dirtyIds.add(note.id);
-        this.#pendingEditorData.set(note.id, note.editorData);
-      }
-    }
+    // Failed saves retain their payloads; hydrated but untouched notes must not be rewritten.
+    for (const id of this.#pendingEditorData.keys()) this.#dirtyIds.add(id);
     this.#persist();
     this.#persist.flush();
   };

@@ -5,12 +5,14 @@ import { Text } from '@lobehub/ui/base-ui';
 import { memo, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { useQuickNotePersistenceLifecycle } from '@/features/QuickNote/NoteLayout/useQuickNotePersistenceLifecycle';
 import { useQuickNoteStore } from '@/store/quickNote';
 
 import LoadError from '../../QuickNote/LoadError';
 import FeedItem from './FeedItem';
 
 const NotesFeed = memo(() => {
+  useQuickNotePersistenceLifecycle();
   const { t } = useTranslation('note');
   const initNotes = useQuickNoteStore((s) => s.initNotes);
   const notes = useQuickNoteStore((s) => s.notes);

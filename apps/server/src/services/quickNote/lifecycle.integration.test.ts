@@ -36,6 +36,51 @@ afterEach(async () => {
 
 /** @example Declined or undelivered runs release their claim without changing dispatched work. */
 describe('Quick Note dispatch lifecycle', () => {
+  /** @example Nonempty captures participate in automatic analysis without an additional edit. */
+  it('persists the configured automatic deadline on create', async () => {
+    const settings = await QuickNoteModel.getAnalyzeSettings(db, userId);
+    vi.spyOn(QuickNoteModel, 'getAnalyzeSettings').mockResolvedValue({
+      ...settings,
+      autoAnalyze: { ...settings.autoAnalyze, enabled: true, idleDelayMs: 6000 },
+    });
+    const before = Date.now();
+    const note = await caller.create({ content: 'captured at Home' });
+    /** @example The durable sweep sees the note after its configured quiet period. */
+    expect(note.analyzeDueAt?.getTime()).toBeGreaterThanOrEqual(before + 6000);
+    const empty = await caller.create({ content: '   ' });
+    /** @example Empty captures do not consume analysis. */
+    expect(empty.analyzeDueAt).toBeNull();
+  });
+
+  /** @example Resource linking finishes before a terminal status becomes observable. */
+  it('keeps the run active until related resources are linked', async () => {
+    const note = await model.create({ content: 'source', editorData: { markdown: 'source' } });
+    const related = await model.create({ content: 'related' });
+    const run = await model.claimRun(note.id, { kind: 'analyze', trigger: 'manual' });
+    let statusWhileLinking: string | undefined;
+    const ownedModel = service['model'];
+    const linkResource = ownedModel.linkResource;
+    vi.spyOn(ownedModel, 'linkResource').mockImplementation(async (...args) => {
+      /** @example Clients cannot stop polling before the resource transaction. */
+      statusWhileLinking = (await model.getRunContext(run!.id))?.status;
+      return linkResource(...args);
+    });
+    await service.onRunComplete({
+      runId: run!.id,
+      reason: 'done',
+      lastAssistantContent: JSON.stringify({
+        annotation: 'result',
+        tags: [],
+        proposals: [],
+        relatedResources: [{ type: 'document', id: related.documentId }],
+      }),
+    });
+    /** @example Linking sees an active run, not an already-published terminal result. */
+    expect(statusWhileLinking).toBe('pending');
+    /** @example Completion is visible only after linking succeeded. */
+    expect((await model.getRunContext(run!.id))?.status).toBe('completed');
+  });
+
   /** @example Disabling automatic analysis lets a later manual request create a fresh run. */
   it('terminalizes an automatic claim declined before dispatch', async () => {
     // ROOT CAUSE:

@@ -357,6 +357,10 @@ export class QuickNoteProcessingService {
               ) === index,
           )
           .slice(0, 5);
+        // Publish terminal state only after its related-resource projection is durable.
+        await Promise.all(
+          relatedResources.map((resource) => this.model.linkResource(params.runId, resource)),
+        );
         const annotation = await this.model.acceptAnnotation(params.runId, {
           content: output.annotation,
           editorData: { markdown: output.annotation },
@@ -364,9 +368,6 @@ export class QuickNoteProcessingService {
           tags: output.tags,
         });
         if (!annotation) return undefined;
-        await Promise.all(
-          relatedResources.map((resource) => this.model.linkResource(params.runId, resource)),
-        );
         return annotation;
       }
 

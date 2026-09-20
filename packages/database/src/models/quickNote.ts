@@ -44,6 +44,8 @@ interface QuickNoteEditorData extends Record<string, unknown> {}
 
 /** Input used to atomically create a Quick Note and its backing containers. */
 export interface CreateQuickNoteParams {
+  /** When this capture becomes eligible for Automatic Analyze. */
+  analyzeDueAt?: Date | null;
   /** Optional collection label chosen by the user. */
   collection?: string | null;
   /** Plain-text projection of the rich-text editor content. */
@@ -309,6 +311,7 @@ export class QuickNoteModel {
       const [quickNote] = await tx
         .insert(quickNotes)
         .values({
+          analyzeDueAt: params.analyzeDueAt,
           collection: params.collection,
           documentId,
           id: quickNoteId,

@@ -6,8 +6,8 @@ import { ActionIcon, Button, Select, Switch, Text, toast } from '@lobehub/ui/bas
 import { Settings2Icon } from 'lucide-react';
 import { memo, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router';
 
+import { useWorkspaceAwareNavigate } from '@/features/Workspace/useWorkspaceAwareNavigate';
 import { useInitBuiltinAgent } from '@/hooks/useInitBuiltinAgent';
 import { useClientDataSWR } from '@/libs/swr';
 import { agentService } from '@/services/agent';
@@ -21,7 +21,7 @@ const BUILTIN_ANALYZER_VALUE = '__quick-note-analyze__';
 /** Compact Quick Note binding UI for Auto Analyze and its configured Agent. */
 const AnalyzeSettings = memo(() => {
   const { t } = useTranslation('note');
-  const navigate = useNavigate();
+  const navigate = useWorkspaceAwareNavigate();
   const [open, setOpen] = useState(false);
   const settings = useUserStore(settingsSelectors.currentQuickNoteSettings);
   const setSettings = useUserStore((state) => state.setSettings);

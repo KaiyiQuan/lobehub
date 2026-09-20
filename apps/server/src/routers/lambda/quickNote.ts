@@ -136,7 +136,14 @@ export const quickNoteRouter = router({
 
   create: quickNoteWriteProcedure.input(createInput).mutation(async ({ ctx, input }) => {
     const model = new QuickNoteModel(ctx.serverDB, ctx.userId, ctx.workspaceId ?? undefined);
-    return model.create(input);
+    const settings = await QuickNoteModel.getAnalyzeSettings(ctx.serverDB, ctx.userId);
+    return model.create({
+      ...input,
+      analyzeDueAt:
+        settings.autoAnalyze.enabled && input.content?.trim()
+          ? new Date(Date.now() + settings.autoAnalyze.idleDelayMs)
+          : null,
+    });
   }),
 
   createComment: quickNoteWriteProcedure

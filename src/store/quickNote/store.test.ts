@@ -142,6 +142,17 @@ describe('quickNote actions', () => {
     vi.restoreAllMocks();
   });
 
+  /** @example Home captures honor their server-issued analysis deadline. */
+  it('schedules automatic analysis for a newly created capture', async () => {
+    vi.mocked(quickNoteService.createNote).mockResolvedValue(
+      createNoteItem({ id: 'created', analyzeDueAt: Date.now() + 6000 }),
+    );
+    await useQuickNoteStore.getState().createNote('captured');
+    await vi.advanceTimersByTimeAsync(6000);
+    /** @example No second edit is needed to start the automatic claim. */
+    expect(quickNoteService.analyze).toHaveBeenCalledWith('created', 'automatic');
+  });
+
   /** @example A different active kind must not terminate observation of a concurrent Dive. */
   it('keeps observing Dive while Analyze occupies the run projection', async () => {
     const note = createNoteItem({ content: 'source', run: { kind: 'dive', status: 'running' } });
@@ -460,6 +471,10 @@ describe('quickNote actions', () => {
     );
     expect(useQuickNoteStore.getState().notes[0].run?.status).toBe('pending');
     expect(useQuickNoteStore.getState().notes[0].run?.trigger).toBe('manual');
+    vi.spyOn(quickNoteService, 'getNotes').mockResolvedValue([createNoteItem({ id: 'a' })]);
+    await vi.advanceTimersByTimeAsync(ANALYZE_SETTLE_DELAY + 1000);
+    /** @example The post-flush automatic timer cannot launch a second run. */
+    expect(quickNoteService.analyze).toHaveBeenCalledTimes(1);
   });
 
   /** @example Continuing to type cancels the countdown for the previously saved revision. */
@@ -533,7 +548,13 @@ describe('quickNote actions', () => {
       .spyOn(quickNoteService, 'updateNoteContent')
       .mockRejectedValueOnce(new Error('offline'))
       .mockResolvedValue({});
-    resetStore({ notes: [createNoteItem({ id: 'a', tags: ['manual'] })], notesInit: true });
+    resetStore({
+      notes: [
+        createNoteItem({ id: 'a', tags: ['manual'] }),
+        createNoteItem({ id: 'untouched', editorData: { revision: 1 } }),
+      ],
+      notesInit: true,
+    });
 
     useQuickNoteStore.getState().updateNoteContent('a', 'hello');
     await vi.advanceTimersByTimeAsync(PERSIST_DEBOUNCE);

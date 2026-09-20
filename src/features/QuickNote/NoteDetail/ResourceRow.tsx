@@ -10,7 +10,7 @@ import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { openDocumentModal } from '@/features/DocumentModal/loader';
-import { useStableNavigate } from '@/hooks/useStableNavigate';
+import { useWorkspaceAwareNavigate } from '@/features/Workspace/useWorkspaceAwareNavigate';
 import type { QuickNoteResource } from '@/services/quickNote';
 import { useTaskStore } from '@/store/task';
 
@@ -64,7 +64,7 @@ const resolveTrailingText = (resource: QuickNoteResource, t: TFunction<'note'>):
 
 const ResourceRow = memo<{ resource: QuickNoteResource }>(({ resource }) => {
   const { t } = useTranslation('note');
-  const navigate = useStableNavigate();
+  const navigate = useWorkspaceAwareNavigate();
   const openTopicDrawer = useTaskStore((s) => s.openTopicDrawer);
   const title = resource.label?.trim() || resource.resourceId;
   const ResourceIcon = getResourceIcon(resource.resourceType);

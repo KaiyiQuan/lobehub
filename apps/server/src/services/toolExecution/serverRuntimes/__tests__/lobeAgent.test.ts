@@ -1101,6 +1101,48 @@ describe('lobeAgentRuntime', () => {
       expect(JSON.parse(maximumResult.content).messages).toHaveLength(20);
     });
 
+    it('preserves a compressed summary that contains messages from the child run', async () => {
+      mockThreadModelFindById.mockResolvedValue({
+        id: 'thread-1',
+        metadata: { totalMessages: 3 },
+        sourceMessageId: 'tool-msg-1',
+        status: 'failed',
+        title: 'Research task',
+        topicId: 'topic-1',
+        type: 'isolation',
+      });
+      mockMessageModelQueryByIds.mockResolvedValue([sourceMessage]);
+      mockMessageModelQuery.mockResolvedValue([
+        {
+          compressedMessages: [
+            { children: [{ id: 'assistant-1', threadId: 'thread-1' }], id: 'assistant-group' },
+          ],
+          content: 'Preserved findings from before compression',
+          id: 'compressed-thread-1',
+          role: 'compressedGroup',
+        },
+        {
+          compressedMessages: [{ id: 'other-1', threadId: 'thread-2' }],
+          content: 'Unrelated thread summary',
+          id: 'compressed-thread-2',
+          role: 'compressedGroup',
+        },
+        { content: 'latest finding', id: 'assistant-2', role: 'assistant', threadId: 'thread-1' },
+      ]);
+      const runtime = lobeAgentRuntime.factory({ ...baseContext, topicId: 'topic-1' });
+
+      const result = await runtime.getSubAgentRun({ threadId: 'thread-1' });
+
+      expect(JSON.parse(result.content).messages).toEqual([
+        {
+          content: 'Preserved findings from before compression',
+          id: 'compressed-thread-1',
+          role: 'compressedGroup',
+        },
+        { content: 'latest finding', id: 'assistant-2', role: 'assistant' },
+      ]);
+    });
+
     it('rejects isolation threads outside the current topic', async () => {
       mockThreadModelFindById.mockResolvedValue({
         id: 'thread-1',

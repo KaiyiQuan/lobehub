@@ -25,7 +25,7 @@ import { UserInteractionExecutionRuntime } from '@lobechat/builtin-tool-user-int
 import type { LobeChatDatabase } from '@lobechat/database';
 import type { ChatStreamPayload } from '@lobechat/model-runtime';
 import { consumeStreamUntilDone } from '@lobechat/model-runtime';
-import type { BuiltinServerRuntimeOutput } from '@lobechat/types';
+import type { BuiltinServerRuntimeOutput, UIChatMessage } from '@lobechat/types';
 import { RequestTrigger, ThreadType } from '@lobechat/types';
 import { nanoid } from '@lobechat/utils';
 import { parseDataUri } from '@lobechat/utils/uriParser';
@@ -73,6 +73,21 @@ const formatInspectableError = (error: unknown): Record<string, unknown> | strin
     else if (typeof value === 'number') result[key] = value;
   }
   return Object.keys(result).length > 0 ? result : undefined;
+};
+
+/** Preserve a compression summary when any nested source message belongs to the child run. */
+const containsSubAgentThreadMessage = (value: unknown, threadId: string): boolean => {
+  if (Array.isArray(value)) {
+    return value.some((item) => containsSubAgentThreadMessage(item, threadId));
+  }
+  if (!value || typeof value !== 'object') return false;
+
+  const node = value as Record<string, unknown>;
+  if (node.threadId === threadId) return true;
+
+  return ['compressedMessages', 'children', 'columns', 'members'].some((key) =>
+    containsSubAgentThreadMessage(node[key], threadId),
+  );
 };
 
 interface LobeAgentRuntimeContext {
@@ -343,7 +358,7 @@ class LobeAgentExecutionRuntime {
       topicId: this.topicId,
     });
     const threadMessages = queriedMessages
-      .filter((message) => message.threadId === thread.id)
+      .filter((message: UIChatMessage) => containsSubAgentThreadMessage(message, thread.id))
       .slice(-limit)
       .map((message) => {
         const error = formatInspectableError(message.pluginError ?? message.error);

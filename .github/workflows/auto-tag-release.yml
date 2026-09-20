@@ -77,13 +77,20 @@ jobs:
         id: patch-version
         if: steps.patch.outputs.should_tag == 'true'
         run: |
-          CURRENT_VERSION="$(node -p "require('./package.json').version")"
-          echo "Current version: ${CURRENT_VERSION}"
+          git fetch --tags origin
+          LATEST_TAG="$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)"
+          if [ -z "$LATEST_TAG" ]; then
+            CURRENT_VERSION="$(node -p "require('./package.json').version")"
+            echo "No stable tag, falling back to package.json: ${CURRENT_VERSION}"
+          else
+            CURRENT_VERSION="${LATEST_TAG#v}"
+            echo "Latest stable tag: ${LATEST_TAG}"
+          fi
 
           # Coerce to stable base (e.g. 2.0.0-beta.1 -> 2.0.0), then bump patch (-> 2.0.1)
           BASE_VERSION="$(npx -y semver@7 "${CURRENT_VERSION}" -c)"
           if [ -z "${BASE_VERSION}" ]; then
-            echo "❌ Invalid version in package.json: ${CURRENT_VERSION}"
+            echo "❌ Invalid version: ${CURRENT_VERSION}"
             exit 1
           fi
 
@@ -138,14 +145,6 @@ jobs:
           draft: false
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
-
-      - name: Sync main to canary
-        if: env.SHOULD_TAG == 'true' && steps.check-tag.outputs.exists == 'false'
-        run: |
-          gh workflow run sync-main-to-canary.yaml --ref main
-          echo "✅ Dispatched sync-main-to-canary workflow"
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
 
       - name: Output result
         run: |

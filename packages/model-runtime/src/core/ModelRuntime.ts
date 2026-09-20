@@ -37,6 +37,35 @@ import type { LobeRuntimeAI } from './BaseAI';
 
 const { logger: timing } = createTimingHelpers('lobe-server:chat:lobehub:timing');
 
+/** Keeps one provider body out of the tracing row's way while staying diagnosable. */
+const MAX_TRACED_ERROR_DETAIL = 4000;
+
+/**
+ * Describes a failed generation for the tracing row.
+ *
+ * A provider either rethrows its own error (`.message` carries the body) or throws the
+ * normalized `ChatCompletionErrorPayload`, which has no `.message` at all — the body sits under
+ * `.error`. Reading only `.message` therefore drops exactly the cases the error refinement
+ * normalized, leaving a tracing row that names a bucket (`UpstreamHttpError`) and nothing else.
+ */
+export const describeGenerateObjectError = (error: {
+  error?: unknown;
+  message?: string;
+}): string | undefined => {
+  if (typeof error?.message === 'string' && error.message.length > 0) return error.message;
+
+  const body = error?.error;
+  if (body === undefined || body === null) return undefined;
+  if (typeof body === 'string') return body.slice(0, MAX_TRACED_ERROR_DETAIL) || undefined;
+
+  try {
+    return JSON.stringify(body).slice(0, MAX_TRACED_ERROR_DETAIL);
+  } catch {
+    // Circular or otherwise unserializable payloads still beat recording nothing.
+    return String(body).slice(0, MAX_TRACED_ERROR_DETAIL);
+  }
+};
+
 const getLobeHubTimingMetadata = (options?: {
   metadata?: Record<string, unknown>;
 }): Record<string, unknown> | undefined =>
@@ -396,10 +425,10 @@ export class ModelRuntime {
       // `AI_*Error` subclasses, Node Errors with `.code`, etc. Try the most
       // descriptive identifier first so the tracing row gets a usable code
       // instead of falling through to `unknown`.
-      const err = error as Error & { code?: string; errorType?: string };
+      const err = error as Error & { code?: string; error?: unknown; errorType?: string };
       const code = err?.errorType ?? err?.code ?? err?.name ?? err?.constructor?.name;
       await fireComplete({
-        error: { code, message: err?.message, stack: err?.stack },
+        error: { code, message: describeGenerateObjectError(err), stack: err?.stack },
         success: false,
       });
       throw error;

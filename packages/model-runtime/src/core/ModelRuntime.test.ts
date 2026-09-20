@@ -822,6 +822,28 @@ describe('ModelRuntime', () => {
         expect(data.error?.message).toBe('invalid key');
       });
 
+      it('onGenerateObjectComplete keeps the provider body when the payload has no message', async () => {
+        const onGenerateObjectComplete = vi.fn();
+        const { runtime, mockRuntimeAI } = createMockRuntime({ onGenerateObjectComplete });
+        // Production shape of a refined upstream rejection: the body is the only description,
+        // and it is the part that names which field the provider refused.
+        const cause = {
+          endpoint: 'https://api.example.com',
+          error: {
+            error: { code: 'invalid_value', param: 'input[1].content[0].type' },
+            status: 400,
+          },
+          errorType: 'UpstreamHttpError',
+          provider: 'azure',
+        };
+        mockRuntimeAI.generateObject.mockRejectedValue(cause);
+
+        await expect(runtime.generateObject(genObjPayload)).rejects.toBe(cause);
+        const [data] = onGenerateObjectComplete.mock.calls[0];
+        expect(data.error?.code).toBe('UpstreamHttpError');
+        expect(data.error?.message).toContain('input[1].content[0].type');
+      });
+
       it('onGenerateObjectComplete falls back to error.name for AI SDK errors', async () => {
         const onGenerateObjectComplete = vi.fn();
         const { runtime, mockRuntimeAI } = createMockRuntime({ onGenerateObjectComplete });

@@ -669,6 +669,23 @@ describe('QuickNoteModel', () => {
     });
 
     /** @example Only the owner without an explicit opt-out is scheduled. */
-    expect(candidates).toEqual([{ id: defaultEnabled.id, userId, workspaceId: null }]);
+    expect(candidates).toMatchObject([{ id: defaultEnabled.id, userId, workspaceId: null }]);
+  });
+  /** @example A due-time tie does not repeat or omit rows across sweep pages. */
+  it('pages due notes after the last due-time and id pair', async () => {
+    const dueAt = new Date('2026-08-24T00:00:00Z');
+    const first = await quickNoteModel.create({ id: 'qn_page_a', content: 'first' });
+    const second = await quickNoteModel.create({ id: 'qn_page_b', content: 'second' });
+    await serverDB
+      .update(quickNotes)
+      .set({ analyzeDueAt: dueAt })
+      .where(inArray(quickNotes.id, [first.id, second.id]));
+    const next = await QuickNoteModel.findDueAnalyzeCandidates(serverDB, {
+      after: { analyzeDueAt: dueAt, id: first.id },
+      limit: 1,
+      now: dueAt,
+    });
+    /** @example The tie-breaker advances to the second capture without skipping equal due times. */
+    expect(next.map(({ id }) => id)).toEqual([second.id]);
   });
 });

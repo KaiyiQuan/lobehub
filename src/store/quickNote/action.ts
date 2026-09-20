@@ -3,7 +3,9 @@ import { debounce } from 'es-toolkit/compat';
 import { mutate, useClientDataSWR } from '@/libs/swr';
 import { quickNoteService } from '@/services/quickNote';
 import type { StoreSetter } from '@/store/types';
+import { flattenActions } from '@/store/utils/flattenActions';
 
+import { initialState } from './initialState';
 import type { QuickNoteStore } from './store';
 
 /** Quiet period after a persisted edit before the client asks the server to claim Analyze. */
@@ -42,7 +44,9 @@ const agenticDetailKey = (id: string) => ['QUICK_NOTE_AGENTIC_DETAIL', id] as co
  */
 export class QuickNoteActionImpl {
   readonly #get: () => QuickNoteStore;
-  readonly #set: Setter;
+  readonly #set: (state: Partial<QuickNoteStore>, replace?: false, action?: string) => void;
+  readonly #rawSet: Setter;
+  #disposed = false;
   readonly #dirtyIds = new Set<string>();
   readonly #pendingEditorData = new Map<string, Record<string, unknown>>();
   readonly #analyzeTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -53,11 +57,46 @@ export class QuickNoteActionImpl {
 
   constructor(set: Setter, get: () => QuickNoteStore, _api?: unknown) {
     void _api;
-    this.#set = set;
+    this.#rawSet = set;
+    this.#set = (state, replace, action) => {
+      if (!this.#disposed) set(state, replace, action);
+    };
     this.#get = get;
   }
 
+  /**
+   * Clears scoped data and replaces actions so old asynchronous work cannot write into the new scope.
+   *
+   * Use when:
+   * - The authenticated user, server, or active workspace changes.
+   *
+   * Expects:
+   * - Scope switching calls reset before hydrating the next list.
+   *
+   * Returns:
+   * - A clean store; old timers, pending saves, and response writers are invalidated.
+   */
+  reset = (): void => {
+    this.#disposed = true;
+    this.#persist.cancel();
+    for (const timers of [this.#analyzeTimers, this.#analyzePollers, this.#divePollers]) {
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
+    }
+    this.#dirtyIds.clear();
+    this.#pendingEditorData.clear();
+    this.#rawSet(
+      {
+        ...initialState,
+        ...flattenActions<QuickNoteAction>([new QuickNoteActionImpl(this.#rawSet, this.#get)]),
+      },
+      false,
+      'resetQuickNoteStore',
+    );
+  };
+
   initNotes = async () => {
+    if (this.#disposed) return;
     if (this.#get().notesInit && !this.#get().notesLoadError) return;
     this.#set({ notesLoadError: false }, false, 'initNotes/start');
 
@@ -130,7 +169,7 @@ export class QuickNoteActionImpl {
     );
 
   refreshAgenticDetails = async (id: string): Promise<void> => {
-    await mutate(agenticDetailKey(id));
+    if (!this.#disposed) await mutate(agenticDetailKey(id));
   };
 
   createComment = async (quickNoteId: string, content: string): Promise<void> => {
@@ -333,7 +372,7 @@ export class QuickNoteActionImpl {
 
     // Manual Analyze must pin the editor revision visible when the user clicks the action.
     await this.#persist.flush();
-    if (this.#get().saveStatus === 'failed') return;
+    if (this.#disposed || this.#get().saveStatus === 'failed') return;
 
     this.#set(
       { analyzingNoteIds: [...this.#get().analyzingNoteIds, id] },
@@ -386,7 +425,7 @@ export class QuickNoteActionImpl {
 
     // Dive must pin the latest durable revision, including edits still inside the save debounce.
     await this.#persist.flush();
-    if (this.#get().saveStatus === 'failed') return;
+    if (this.#disposed || this.#get().saveStatus === 'failed') return;
 
     this.#set({ divingNoteIds: [...divingNoteIds, id] }, false, 'diveInto/start');
     this.#diveBaselineAnnotationTimes.set(
@@ -443,6 +482,7 @@ export class QuickNoteActionImpl {
 
   #persist = debounce(
     async () => {
+      if (this.#disposed) return;
       const ids = [...this.#dirtyIds];
       if (ids.length === 0) return;
       for (const id of ids) this.#dirtyIds.delete(id);
@@ -482,6 +522,7 @@ export class QuickNoteActionImpl {
   );
 
   #scheduleAnalyze = (id: string, dueAt: number) => {
+    if (this.#disposed) return;
     const existing = this.#analyzeTimers.get(id);
     if (existing) clearTimeout(existing);
 
@@ -531,6 +572,7 @@ export class QuickNoteActionImpl {
   };
 
   #scheduleAnalyzePoll = (id: string) => {
+    if (this.#disposed) return;
     const existing = this.#analyzePollers.get(id);
     if (existing) clearTimeout(existing);
 
@@ -559,6 +601,7 @@ export class QuickNoteActionImpl {
   };
 
   #scheduleDivePoll = (id: string) => {
+    if (this.#disposed) return;
     const existing = this.#divePollers.get(id);
     if (existing) clearTimeout(existing);
 

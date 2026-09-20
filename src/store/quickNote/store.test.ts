@@ -22,6 +22,7 @@ const createNoteItem = (patch: Partial<QuickNoteItem>): QuickNoteItem => ({
 });
 
 const resetStore = (patch?: Partial<QuickNoteState>) => {
+  useQuickNoteStore.getState().reset();
   useQuickNoteStore.setState({ ...initialState, ...patch });
 };
 
@@ -192,6 +193,52 @@ describe('quickNote actions', () => {
       content: 'saved while polling',
       editorData: { revision: 2 },
     });
+  });
+
+  /** @example Switching scope cancels pending saves and hydrates the new note list. */
+  it('resets hydrated notes and cancels old-scope timers and saves', async () => {
+    const old = createNoteItem({
+      id: 'old-scope',
+      content: 'private',
+      run: { kind: 'analyze', status: 'running' },
+    });
+    vi.spyOn(quickNoteService, 'getNotes')
+      .mockResolvedValueOnce([old])
+      .mockResolvedValueOnce([createNoteItem({ id: 'new-scope' })]);
+    await useQuickNoteStore.getState().initNotes();
+    useQuickNoteStore.getState().updateNoteContent(old.id, 'unsaved', { revision: 1 });
+    useQuickNoteStore.getState().reset();
+    /** @example Private data is cleared synchronously before the new request. */
+    expect(useQuickNoteStore.getState().notes).toEqual([]);
+    await useQuickNoteStore.getState().initNotes();
+    await vi.advanceTimersByTimeAsync(10_000);
+    /** @example No old-scope save is sent with the new scope's request headers. */
+    expect(quickNoteService.updateNoteContent).not.toHaveBeenCalled();
+    /** @example Initialization is allowed again in the new scope. */
+    expect(useQuickNoteStore.getState().notes[0].id).toBe('new-scope');
+  });
+
+  /** @example A slow response from an old scope cannot repopulate a reset store. */
+  it('discards a note-list response arriving after scope reset', async () => {
+    let resolveOld!: (notes: QuickNoteItem[]) => void;
+    vi.spyOn(quickNoteService, 'getNotes')
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOld = resolve;
+          }),
+      )
+      .mockResolvedValueOnce([createNoteItem({ id: 'current-scope' })]);
+    const oldRequest = useQuickNoteStore.getState().initNotes();
+    useQuickNoteStore.getState().reset();
+    await useQuickNoteStore.getState().initNotes();
+    resolveOld([createNoteItem({ id: 'private-old', run: { kind: 'dive', status: 'running' } })]);
+    await oldRequest;
+    await vi.advanceTimersByTimeAsync(DIVE_POLL_INTERVAL);
+    /** @example The old response neither replaces the new list nor restarts old polling. */
+    expect(useQuickNoteStore.getState().notes.map(({ id }) => id)).toEqual(['current-scope']);
+    /** @example Only one hydration request per scope was made. */
+    expect(quickNoteService.getNotes).toHaveBeenCalledTimes(2);
   });
 
   it('initNotes loads from the service only once', async () => {

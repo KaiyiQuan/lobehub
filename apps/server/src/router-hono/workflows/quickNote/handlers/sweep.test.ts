@@ -52,4 +52,35 @@ describe('Quick Note sweep rollout', () => {
       trigger: 'automatic',
     });
   });
+  /** @example A full disabled prefix cannot hide an eligible note on the next page. */
+  it('continues past 100 rollout-disabled candidates', async () => {
+    // ROOT CAUSE:
+    // Eligibility was checked after LIMIT 100, selecting the same disabled prefix forever.
+    const disabled = Array.from({ length: 100 }, (_, index) => ({
+      id: `disabled-${index}`,
+      userId: 'disabled',
+      analyzeDueAt: new Date(0),
+    }));
+    mocks.candidates
+      .mockResolvedValueOnce(disabled)
+      .mockResolvedValueOnce([{ id: 'eligible', userId: 'tester', analyzeDueAt: new Date(1) }]);
+    mocks.flags.mockImplementation(async (userId: string) =>
+      mapFeatureFlagsEnvToState({ quick_note: ['tester'] }, userId),
+    );
+    mocks.claim.mockResolvedValue({
+      id: 'run',
+      quickNoteId: 'eligible',
+      sourceHistoryId: 'history',
+    });
+    mocks.enqueue.mockResolvedValue({ accepted: true });
+    const response = await new Hono()
+      .post('/sweep', sweepQuickNoteAnalyze)
+      .request('/sweep', { method: 'POST' });
+    /** @example The second page's eligible user receives automatic analysis. */
+    expect(await response.json()).toEqual({ checked: 101, enqueued: 1, success: true });
+    /** @example The next query resumes after the disabled page rather than rereading it. */
+    expect(mocks.candidates.mock.calls[1][1]).toMatchObject({
+      after: { id: 'disabled-99', analyzeDueAt: new Date(0) },
+    });
+  });
 });

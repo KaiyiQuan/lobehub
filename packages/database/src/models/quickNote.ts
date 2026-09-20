@@ -13,7 +13,7 @@ import type {
   QuickNoteRunKind,
   UserQuickNoteSettings,
 } from '@lobechat/types';
-import { and, asc, desc, eq, inArray, isNull, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import isEqual from 'fast-deep-equal';
 
@@ -222,18 +222,26 @@ export class QuickNoteModel {
    * - The one-minute server sweep compensates for closed or disconnected clients.
    *
    * Expects:
-   * - `limit` bounds one cron invocation and defaults to 100.
+   * - `limit` bounds one page and defaults to 100; `after` advances the due-time/id cursor.
    * - Missing user settings mean enabled.
    *
    * Returns:
-   * - Owner/workspace routing identities ordered by oldest due time first.
+   * - Owner/workspace routing identities ordered by due time, then ID for stable paging.
    */
   static findDueAnalyzeCandidates = async (
     db: LobeChatDatabase,
-    params: { limit?: number; now?: Date } = {},
+    params: {
+      /** Resume after a previously scanned due-time/id pair. */
+      after?: { analyzeDueAt: Date; id: string };
+      /** Maximum rows in one page. @default 100 */
+      limit?: number;
+      /** Stable due-time cutoff across pages. @default new Date() */
+      now?: Date;
+    } = {},
   ) =>
     db
       .select({
+        analyzeDueAt: quickNotes.analyzeDueAt,
         id: quickNotes.id,
         userId: quickNotes.userId,
         workspaceId: quickNotes.workspaceId,
@@ -243,10 +251,18 @@ export class QuickNoteModel {
       .where(
         and(
           lte(quickNotes.analyzeDueAt, params.now ?? new Date()),
+          params.after &&
+            or(
+              gt(quickNotes.analyzeDueAt, params.after.analyzeDueAt),
+              and(
+                eq(quickNotes.analyzeDueAt, params.after.analyzeDueAt),
+                gt(quickNotes.id, params.after.id),
+              ),
+            ),
           sql`COALESCE((${userSettings.quickNote} -> 'autoAnalyze' ->> 'enabled')::boolean, (${userSettings.general} ->> 'enableQuickNoteAutomaticDiscovery')::boolean, true)`,
         ),
       )
-      .orderBy(quickNotes.analyzeDueAt)
+      .orderBy(quickNotes.analyzeDueAt, quickNotes.id)
       .limit(params.limit ?? 100);
 
   /**

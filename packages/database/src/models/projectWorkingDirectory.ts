@@ -1,8 +1,7 @@
 import nodePath from 'node:path';
 
-import type { ChatTopicMetadata, EnvironmentConfiguration } from '@lobechat/types';
 import { getWorkingDirSourcePath } from '@lobechat/types';
-import { and, asc, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, or, sql } from 'drizzle-orm';
 
 import {
   agents,
@@ -17,36 +16,6 @@ import {
 import type { LobeChatDatabase } from '../type';
 import { buildWorkspaceWhere } from '../utils/workspace';
 
-export interface BindProjectDirectoryInput {
-  agentId?: string;
-  deviceId: string;
-  environmentId?: string;
-  name: string;
-  path: string;
-  projectId: string;
-  repositoryUrl?: string;
-  topicIds?: string[];
-}
-
-/** Canonical GitHub source only; credentials and arbitrary clone transports are never persisted. */
-export const normalizeProjectRepository = (value: string): string => {
-  const ssh = /^git@github\.com:([^/]+\/[^/]+?)(?:\.git)?$/.exec(value.trim());
-  const url = new URL(ssh ? `https://github.com/${ssh[1]}` : value.trim());
-  if (
-    url.protocol !== 'https:' ||
-    url.hostname !== 'github.com' ||
-    url.port ||
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash
-  )
-    throw new Error('Use a GitHub repository URL without credentials');
-  const path = url.pathname.replace(/\/$/, '').replace(/\.git$/, '');
-  if (!/^\/[\w.-]+\/[\w.-]+$/.test(path)) throw new Error('Use a GitHub repository URL');
-  return `https://github.com${path}`;
-};
-
 export const normalizeProjectDirectory = (value: string, platform: string | null) => {
   const paths = platform === 'win32' ? nodePath.win32 : nodePath.posix;
   if (!value.trim() || value.includes('\0') || !paths.isAbsolute(value))
@@ -57,6 +26,13 @@ export const normalizeProjectDirectory = (value: string, platform: string | null
     : normalized;
 };
 
+/**
+ * Single-aggregate access to project working directories: directory queries,
+ * the environment/instance state resolution behind them, and directory-scoped
+ * topic reads. Cross-table write flows (bind, associateTopic) live in
+ * `repositories/projectDirectory`; environment and project-link access live on
+ * `EnvironmentModel` and `ProjectModel`.
+ */
 export class ProjectWorkingDirectoryModel {
   constructor(
     private readonly db: LobeChatDatabase,
@@ -84,246 +60,30 @@ export class ProjectWorkingDirectoryModel {
     return row;
   }
 
-  async listEnvironments(projectId?: string) {
-    if (projectId) await this.project(projectId);
-    const rows = await this.db
-      .select({
-        id: environments.id,
-        name: environments.name,
-        configuration: environments.configuration,
-      })
-      .from(environments)
-      .where(and(buildWorkspaceWhere(this.scope(), environments), eq(environments.enabled, true)));
-    if (!projectId) return rows;
-    const links = await this.db
-      .select({ id: projectEnvironments.environmentId })
-      .from(projectEnvironments)
-      .where(
-        and(eq(projectEnvironments.projectId, projectId), eq(projectEnvironments.enabled, true)),
-      );
-    return rows.filter((row) => links.some((link) => link.id === row.id));
-  }
-
-  async saveEnvironment(input: { id?: string; name: string; repositoryUrl?: string }) {
-    const source = input.repositoryUrl?.trim();
-    const configuration: EnvironmentConfiguration = source
-      ? { sources: [{ kind: 'git', url: normalizeProjectRepository(source) }] }
-      : {};
-    if (input.id) {
-      const [existing] = await this.db
-        .select()
-        .from(environments)
-        .where(
-          and(
-            eq(environments.id, input.id),
-            buildWorkspaceWhere(this.scope(), environments),
-            eq(environments.userId, this.userId),
-          ),
-        );
-      if (!existing) throw new Error('Environment not found or access denied');
-      const [row] = await this.db
-        .update(environments)
-        .set({
-          name: input.name.trim(),
-          configuration: { ...existing.configuration, sources: configuration.sources ?? [] },
-          updatedAt: new Date(),
-        })
-        .where(eq(environments.id, existing.id))
-        .returning();
-      return row;
-    }
+  async findByLocation(projectId: string, deviceId: string, path: string) {
     const [row] = await this.db
-      .insert(environments)
-      .values({
-        name: input.name.trim(),
-        configuration,
-        userId: this.userId,
-        workspaceId: this.workspaceId,
-      })
-      .returning();
+      .select()
+      .from(projectWorkingDirectories)
+      .where(
+        and(
+          eq(projectWorkingDirectories.projectId, projectId),
+          eq(projectWorkingDirectories.deviceId, deviceId),
+          eq(projectWorkingDirectories.path, path),
+        ),
+      );
     return row;
   }
 
-  async attachEnvironment(projectId: string, environmentId: string) {
-    await this.project(projectId, true);
-    if (!(await this.listEnvironments()).some((row) => row.id === environmentId))
-      throw new Error('Environment not found or access denied');
-    await this.db
-      .insert(projectEnvironments)
-      .values({
-        projectId,
-        environmentId,
-        workspaceId: this.workspaceId,
-        addedByUserId: this.userId,
-      })
-      .onConflictDoNothing();
-    return { projectId, environmentId };
-  }
-
-  async bind(input: BindProjectDirectoryInput) {
-    await this.project(input.projectId, true);
-    return this.db.transaction(async (tx) => {
-      // Serialize bindings of the same device, including bindings from different projects.
-      const [device] = await tx
-        .select()
-        .from(devices)
-        .where(
-          and(eq(devices.deviceId, input.deviceId), buildWorkspaceWhere(this.scope(), devices)),
-        )
-        .for('update');
-      if (!device) throw new Error('Device not found or access denied');
-      const path = normalizeProjectDirectory(input.path, device.platform);
-      const repositoryUrl = input.repositoryUrl
-        ? normalizeProjectRepository(input.repositoryUrl)
-        : undefined;
-      const [existing] = await tx
-        .select()
-        .from(environmentInstances)
-        .where(
-          and(
-            eq(environmentInstances.deviceId, device.id),
-            eq(environmentInstances.workingDirectory, path),
-          ),
-        );
-      let instance = existing;
-      let environment;
-      const environmentId = existing?.environmentId ?? input.environmentId;
-      if (environmentId) {
-        [environment] = await tx
-          .select()
-          .from(environments)
-          .where(
-            and(
-              eq(environments.id, environmentId),
-              buildWorkspaceWhere(this.scope(), environments),
-              eq(environments.enabled, true),
-            ),
-          );
-        if (!environment || (input.environmentId && input.environmentId !== environment.id))
-          throw new Error('This directory belongs to another environment');
-        if (
-          repositoryUrl &&
-          !environment.configuration.sources?.some(
-            (source) => source.kind === 'git' && source.url === repositoryUrl,
-          )
-        )
-          throw new Error('Repository differs from the existing environment');
-      } else {
-        const configuration: EnvironmentConfiguration = repositoryUrl
-          ? { sources: [{ kind: 'git', url: repositoryUrl }] }
-          : {};
-        [environment] = await tx
-          .insert(environments)
-          .values({
-            configuration,
-            name: input.name.trim(),
-            userId: this.userId,
-            workspaceId: this.workspaceId,
-          })
-          .returning();
-      }
-      if (!instance) {
-        [instance] = await tx
-          .insert(environmentInstances)
-          .values({
-            configurationSnapshot: environment.configuration,
-            deviceId: device.id,
-            environmentId: environment.id,
-            kind: 'device',
-            name: input.name.trim(),
-            workingDirectory: path,
-          })
-          .returning();
-      }
-      if (!instance.enabled) throw new Error('Environment instance is disabled');
-      await tx
-        .insert(projectEnvironments)
-        .values({
-          addedByUserId: this.userId,
-          environmentId: environment.id,
-          projectId: input.projectId,
-          workspaceId: this.workspaceId,
-        })
-        .onConflictDoNothing();
-      const [link] = await tx
-        .select()
-        .from(projectEnvironments)
-        .where(
-          and(
-            eq(projectEnvironments.projectId, input.projectId),
-            eq(projectEnvironments.environmentId, environment.id),
-          ),
-        );
-      if (!link.enabled) throw new Error('Environment is disabled in this project');
-      const [prior] = await tx
-        .select()
-        .from(projectWorkingDirectories)
-        .where(
-          and(
-            eq(projectWorkingDirectories.projectId, input.projectId),
-            eq(projectWorkingDirectories.deviceId, device.id),
-            eq(projectWorkingDirectories.path, path),
-          ),
-        );
-      const directory =
-        prior ??
-        (
-          await tx
-            .insert(projectWorkingDirectories)
-            .values({
-              addedByUserId: this.userId,
-              deviceId: device.id,
-              name: input.name.trim(),
-              path,
-              projectId: input.projectId,
-              workspaceId: this.workspaceId,
-            })
-            .returning()
-        )[0];
-      if (input.topicIds?.length) {
-        if (!input.agentId) throw new Error('Agent is required when filing conversations');
-        const selected = await tx
-          .select()
-          .from(topics)
-          .where(
-            and(
-              inArray(topics.id, input.topicIds),
-              eq(topics.agentId, input.agentId),
-              eq(topics.userId, this.userId),
-              buildWorkspaceWhere(this.scope(), topics),
-            ),
-          )
-          .for('update');
-        if (selected.length !== new Set(input.topicIds).size)
-          throw new Error('Conversation not found or access denied');
-        for (const topic of selected) {
-          const metadata = topic.metadata ?? {};
-          const source = getWorkingDirSourcePath(
-            metadata.workingDirectoryConfig ?? metadata.workingDirectory,
-          );
-          const pinnedDevice = metadata.boundDeviceId ?? metadata.runningOperation?.deviceId;
-          if (
-            !source ||
-            normalizeProjectDirectory(source, device.platform) !== path ||
-            (pinnedDevice && pinnedDevice !== device.deviceId)
-          )
-            throw new Error('Conversation uses a different directory or device');
-          if (topic.projectId && topic.projectId !== input.projectId)
-            throw new Error('Conversation already belongs to another project');
-          if (metadata.runningOperation || topic.status === 'running')
-            throw new Error('Wait for the conversation to finish before binding it');
-          await tx
-            .update(topics)
-            .set({
-              projectId: input.projectId,
-              projectWorkingDirectoryId: directory.id,
-              metadata: { ...metadata, boundDeviceId: device.deviceId },
-            })
-            .where(eq(topics.id, topic.id));
-        }
-      }
-      return directory;
-    });
+  async create(input: {
+    addedByUserId: string;
+    deviceId: string;
+    name: string;
+    path: string;
+    projectId: string;
+    workspaceId?: string;
+  }) {
+    const [row] = await this.db.insert(projectWorkingDirectories).values(input).returning();
+    return row;
   }
 
   async list(projectId?: string) {
@@ -406,158 +166,6 @@ export class ProjectWorkingDirectoryModel {
       throw new Error('Project environment is disabled');
     if (row.permission !== 'readWrite') throw new Error('This directory is read-only');
     return { ...row, instanceId: row.instanceId, environmentId: row.environmentId };
-  }
-
-  async startTopic(directoryId: string, agentId: string, title: string) {
-    const directory = await this.resolve(directoryId);
-    const [agent] = await this.db
-      .select()
-      .from(agents)
-      .where(and(eq(agents.id, agentId), buildWorkspaceWhere(this.scope(), agents)));
-    if (!agent) throw new Error('Agent not found or access denied');
-    if (
-      agent.agencyConfig?.executionTargetSelectionPolicy === 'fixed' &&
-      agent.agencyConfig.boundDeviceId !== directory.deviceId
-    )
-      throw new Error('This agent is fixed to another execution target');
-    const metadata: ChatTopicMetadata = {
-      boundDeviceId: directory.deviceId,
-      workingDirectory: directory.path,
-      workingDirectoryConfig: { path: directory.path },
-    };
-    const [topic] = await this.db
-      .insert(topics)
-      .values({
-        agentId,
-        metadata,
-        projectId: directory.projectId,
-        projectWorkingDirectoryId: directory.id,
-        title,
-        userId: this.userId,
-        workspaceId: this.workspaceId,
-      })
-      .returning();
-    return topic;
-  }
-
-  async listProjectTopics(projectId: string) {
-    await this.project(projectId);
-    return this.db
-      .select({
-        id: topics.id,
-        createdAt: topics.createdAt,
-        favorite: topics.favorite,
-        metadata: topics.metadata,
-        trigger: topics.trigger,
-        userId: topics.userId,
-        title: topics.title,
-        status: topics.status,
-        agentId: topics.agentId,
-        agentTitle: agents.title,
-        agentName: agents.name,
-        agentAvatar: agents.avatar,
-        updatedAt: topics.updatedAt,
-        projectWorkingDirectoryId: topics.projectWorkingDirectoryId,
-      })
-      .from(topics)
-      .innerJoin(agents, eq(agents.id, topics.agentId))
-      .where(
-        and(
-          eq(topics.projectId, projectId),
-          buildWorkspaceWhere(this.scope(), topics),
-          buildWorkspaceWhere(this.scope(), agents),
-          isNull(topics.deletedAt),
-        ),
-      )
-      .orderBy(desc(topics.updatedAt));
-  }
-
-  async createProjectTopic(projectId: string, agentId: string, title: string) {
-    await this.project(projectId, true);
-    const [agent] = await this.db
-      .select({ id: agents.id })
-      .from(agents)
-      .where(and(eq(agents.id, agentId), buildWorkspaceWhere(this.scope(), agents)));
-    if (!agent) throw new Error('Agent not found or access denied');
-    const [topic] = await this.db
-      .insert(topics)
-      .values({
-        projectId,
-        agentId,
-        title,
-        userId: this.userId,
-        workspaceId: this.workspaceId,
-      })
-      .returning();
-    return topic;
-  }
-
-  async associateTopic(projectId: string, topicId: string, directoryId?: string) {
-    await this.project(projectId, true);
-    const directory = directoryId ? await this.resolve(directoryId, projectId) : undefined;
-    return this.db.transaction(async (tx) => {
-      const [topic] = await tx
-        .select()
-        .from(topics)
-        .where(
-          and(
-            eq(topics.id, topicId),
-            eq(topics.userId, this.userId),
-            buildWorkspaceWhere(this.scope(), topics),
-            isNull(topics.deletedAt),
-          ),
-        )
-        .for('update');
-      if (!topic) throw new Error('Topic not found or access denied');
-      if (topic.projectId && topic.projectId !== projectId)
-        throw new Error('Topic already belongs to another project');
-      if (topic.status === 'running' || topic.metadata?.runningOperation)
-        throw new Error('Wait for the running topic to finish before associating it');
-      const source = getWorkingDirSourcePath(
-        topic.metadata?.workingDirectoryConfig ?? topic.metadata?.workingDirectory,
-      );
-      if (source && !directory) throw new Error('Select the existing working directory');
-      const pinned = topic.metadata?.boundDeviceId;
-      if (
-        directory &&
-        ((source && source.replace(/[\\/]+$/, '') !== directory.path.replace(/[\\/]+$/, '')) ||
-          (pinned && pinned !== directory.deviceId))
-      )
-        throw new Error('Keep the existing device and working directory');
-      if (topic.projectWorkingDirectoryId && topic.projectWorkingDirectoryId !== directoryId)
-        throw new Error('Keep the existing project directory binding');
-      if (directory && topic.agentId) {
-        const [agent] = await tx
-          .select()
-          .from(agents)
-          .where(and(eq(agents.id, topic.agentId), buildWorkspaceWhere(this.scope(), agents)));
-        if (
-          !agent ||
-          (agent.agencyConfig?.executionTargetSelectionPolicy === 'fixed' &&
-            agent.agencyConfig.boundDeviceId !== directory.deviceId)
-        )
-          throw new Error('Agent cannot use this execution target');
-      }
-      const [updated] = await tx
-        .update(topics)
-        .set({
-          projectId,
-          ...(directory
-            ? {
-                projectWorkingDirectoryId: directory.id,
-                metadata: {
-                  ...topic.metadata,
-                  boundDeviceId: directory.deviceId,
-                  workingDirectory: directory.path,
-                  workingDirectoryConfig: { path: directory.path },
-                },
-              }
-            : {}),
-        })
-        .where(eq(topics.id, topicId))
-        .returning();
-      return updated;
-    });
   }
 
   async listTopics(directoryId: string) {

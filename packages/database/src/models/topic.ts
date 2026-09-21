@@ -194,6 +194,10 @@ export interface CreateTopicParams {
   metadata?: ChatTopicMetadata;
   /** Pinned model snapshot, persisted to the top-level `topics.model` column. */
   model?: string | null;
+  /** Owning business project, independent of the execution directory. */
+  projectId?: string | null;
+  /** Project directory this conversation is pinned to as its execution context. */
+  projectWorkingDirectoryId?: string | null;
   provider?: string | null;
   /**
    * Agent-share visitor topics carry the CREATOR's `userId` (billing/data

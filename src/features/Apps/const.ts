@@ -1,3 +1,5 @@
+export { CLI_INSTALL_COMMAND } from '@lobechat/business-const';
+
 const LANDING_CDN = 'https://hub-apac-1.lobeobjects.space/images';
 
 export const APP_SHOTS = {

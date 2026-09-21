@@ -301,10 +301,7 @@ export class ProjectWorkingDirectoryModel {
           const source = getWorkingDirSourcePath(
             metadata.workingDirectoryConfig ?? metadata.workingDirectory,
           );
-          const pinnedDevice =
-            metadata.projectExecution?.deviceId ??
-            metadata.boundDeviceId ??
-            metadata.runningOperation?.deviceId;
+          const pinnedDevice = metadata.boundDeviceId ?? metadata.runningOperation?.deviceId;
           if (
             !source ||
             normalizeProjectDirectory(source, device.platform) !== path ||
@@ -320,7 +317,7 @@ export class ProjectWorkingDirectoryModel {
             .set({
               projectId: input.projectId,
               projectWorkingDirectoryId: directory.id,
-              metadata: { ...metadata, projectExecution: { deviceId: device.deviceId } },
+              metadata: { ...metadata, boundDeviceId: device.deviceId },
             })
             .where(eq(topics.id, topic.id));
         }
@@ -424,7 +421,7 @@ export class ProjectWorkingDirectoryModel {
     )
       throw new Error('This agent is fixed to another execution target');
     const metadata: ChatTopicMetadata = {
-      projectExecution: { deviceId: directory.deviceId },
+      boundDeviceId: directory.deviceId,
       workingDirectory: directory.path,
       workingDirectoryConfig: { path: directory.path },
     };
@@ -520,7 +517,7 @@ export class ProjectWorkingDirectoryModel {
         topic.metadata?.workingDirectoryConfig ?? topic.metadata?.workingDirectory,
       );
       if (source && !directory) throw new Error('Select the existing working directory');
-      const pinned = topic.metadata?.projectExecution?.deviceId ?? topic.metadata?.boundDeviceId;
+      const pinned = topic.metadata?.boundDeviceId;
       if (
         directory &&
         ((source && source.replace(/[\\/]+$/, '') !== directory.path.replace(/[\\/]+$/, '')) ||
@@ -550,7 +547,7 @@ export class ProjectWorkingDirectoryModel {
                 projectWorkingDirectoryId: directory.id,
                 metadata: {
                   ...topic.metadata,
-                  projectExecution: { deviceId: directory.deviceId },
+                  boundDeviceId: directory.deviceId,
                   workingDirectory: directory.path,
                   workingDirectoryConfig: { path: directory.path },
                 },
@@ -595,7 +592,7 @@ export class ProjectWorkingDirectoryModel {
       .from(topics)
       .where(and(eq(topics.id, topicId), buildWorkspaceWhere(this.scope(), topics)));
     if (!topic?.projectWorkingDirectoryId) {
-      if (topic?.metadata?.projectExecution)
+      if (topic?.metadata?.boundDeviceId)
         throw new Error('Project directory binding no longer exists');
       return;
     }

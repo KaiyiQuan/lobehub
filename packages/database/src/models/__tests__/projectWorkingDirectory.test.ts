@@ -160,7 +160,7 @@ describe('project directory bindings', () => {
     expect(topic).toMatchObject({
       projectId: base.projectId,
       projectWorkingDirectoryId: directory.id,
-      metadata: { projectExecution: { deviceId: base.deviceId }, workingDirectory: base.path },
+      metadata: { boundDeviceId: base.deviceId, workingDirectory: base.path },
     });
     await db
       .update(agents)

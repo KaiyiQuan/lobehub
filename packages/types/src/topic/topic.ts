@@ -227,8 +227,6 @@ export interface ChatTopicMetadata {
    */
   onboardingFeedback?: OnboardingFeedbackEntry;
   onboardingSession?: OnboardingSessionSnapshot;
-  /** Server-resolved device for a project directory; authoritative access is rechecked on execution. */
-  projectExecution?: { deviceId: string };
   /** Measured dominant provider by token volume — see {@link ChatTopicMetadata.model}. */
   provider?: string;
   /**

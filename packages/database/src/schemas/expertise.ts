@@ -2,6 +2,7 @@ import type {
   ExpertiseAnchorCandidate,
   ExpertiseBacktestResult,
   ExpertiseCanonEntry,
+  ExpertiseEnforcement,
   ExpertiseEvidenceSpecItem,
   ExpertiseInsightEvidenceRef,
   ExpertiseLayerDefinition,
@@ -363,6 +364,11 @@ export const expertiseLessons = pgTable(
       onDelete: 'set null',
     }),
     retiredAt: timestamptz('retired_at'),
+
+    /** Where the reviewer put this rule in their own ordering; lower first, ties by creation. */
+    sortOrder: integer('sort_order').notNull().default(0),
+    /** Whether breaking it should hold the delivery (`block`) or only inform the agent (`remind`). */
+    enforcement: text('enforcement').$type<ExpertiseEnforcement>().notNull().default('remind'),
 
     /** Where a lesson ends up: compiled into a machine-runnable criterion. Mental-model-layer lessons are always not-compilable. */
     compilability: text('compilability', { enum: EXPERTISE_COMPILABILITIES })

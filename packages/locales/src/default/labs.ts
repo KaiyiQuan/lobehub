@@ -42,6 +42,9 @@ export default {
   'features.inputMarkdown.desc':
     'Render Markdown in the input area in real time (bold text, code blocks, tables, etc.).',
   'features.inputMarkdown.title': 'Input Markdown Rendering',
+  'features.memoryRules.desc':
+    'Adds "My rules" under Memory: the delivery rules distilled from the acceptance rounds you sent back, with ordering, grouping and block / remind controls.',
+  'features.memoryRules.title': 'My rules',
   'features.messageTextSelectionActions.desc':
     'Show a quick action when selecting text in chat messages so the selected text can be added to the next conversation context.',
   'features.messageTextSelectionActions.title': 'Message Text Selection Actions',

@@ -111,7 +111,7 @@ export const MemoryManifest: BuiltinToolManifest = {
             description:
               'Optional memory layers to search. Must be an array even for one layer, for example ["preference"].',
             items: {
-              enum: ['activity', 'context', 'experience', 'identity', 'preference'],
+              enum: ['activity', 'context', 'identity', 'preference'],
               type: 'string',
             },
             type: 'array',
@@ -164,7 +164,6 @@ export const MemoryManifest: BuiltinToolManifest = {
             properties: {
               activities: { minimum: 0, type: 'integer' },
               contexts: { minimum: 0, type: 'integer' },
-              experiences: { minimum: 0, type: 'integer' },
               identities: { minimum: 0, type: 'integer' },
               preferences: { minimum: 0, type: 'integer' },
             },
@@ -199,7 +198,7 @@ export const MemoryManifest: BuiltinToolManifest = {
             description:
               'Optional memory layers to scope the taxonomy lookup. Must be an array even for one layer.',
             items: {
-              enum: ['activity', 'context', 'experience', 'identity', 'preference'],
+              enum: ['activity', 'context', 'identity', 'preference'],
               type: 'string',
             },
             type: 'array',
@@ -881,7 +880,7 @@ export const MemoryManifest: BuiltinToolManifest = {
   meta: {
     avatar: '🧠',
     description:
-      'Store and recall user preferences, activities, identities, and experiences across conversations',
+      'Store and recall user preferences, activities, identities, and contexts across conversations',
     title: 'Memory',
   },
   systemRole: systemPrompt,

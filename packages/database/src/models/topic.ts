@@ -1357,8 +1357,6 @@ export class TopicModel {
         createdAt: topics.createdAt,
         id: topics.id,
         metadata: topics.metadata,
-        projectId: topics.projectId,
-        projectWorkingDirectoryId: topics.projectWorkingDirectoryId,
         title: topics.title,
         updatedAt: topics.updatedAt,
       })

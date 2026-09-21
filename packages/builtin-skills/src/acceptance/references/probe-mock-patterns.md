@@ -273,15 +273,20 @@ derive(item))`) captures the value at first render. When a persisted cache hydra
   (`Resource temporarily unavailable` / `CDP response channel closed`) while
   `eval`/`get url` keep working — **not** a display-sleep or permission issue. Reset
   with `agent-browser close --all`, or skip the daemon entirely (D6).
-- **D6. WORKS — raw-CDP screenshot bypasses the daemon.** `scripts/cdp-screenshot.sh [--port <n>] [--out x.png] [--full] [--check]` opens its own ws to the target, does
+- **D6. WORKS — raw-CDP screenshot bypasses the daemon.** The bundled
+  `bash "$SKILL_DIR/scripts/cdp-screenshot.sh" [--port <n>] [--out x.png] [--full] [--check]`
+  opens its own WebSocket to the target, does
   one `Page.captureScreenshot`, and closes (\~60ms). Immune to the D5 wedge and
   **robust when the display is asleep or the window is minimized/occluded** (the
   engine forces a compositor frame). Use it for Electron evidence and as a preflight
-  (`--check` → exit 0 iff a real, non-black frame was captured).
+  (`--check` → exit 0 iff a real, non-black frame was measured). Resolve `SKILL_DIR`
+  and check platform/runtime requirements in [screenshot-helpers.md](screenshot-helpers.md);
+  a missing brightness probe returns undetermined, never PASS.
 - **D7. OS `screencapture` is BLACK when the display is asleep/locked/screensaver.**
   Distinct from D5/D6: `screencapture` (and `capture-app-window.sh`, osascript grabs)
   captures the physical framebuffer, so an idle-slept display → a uniformly black PNG
-  (mean/max = 0). Permission can be fine. Gate with `scripts/check-screen-recording.sh`
+  (mean/max = 0). Permission can be fine. Gate with the bundled
+  `bash "$SKILL_DIR/scripts/check-screen-recording.sh"`
   (checks the permission bit + a real-frame blackness probe) and keep the display
   awake for the whole run: `caffeinate -dimsu &`. CDP capture (D6) does not have this
   problem.

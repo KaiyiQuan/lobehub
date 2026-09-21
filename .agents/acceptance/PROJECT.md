@@ -12,9 +12,12 @@ Its two siblings:
   report, and round are. In this repository that path is a symlink onto the
   skill's source, `packages/builtin-skills/src/acceptance/`.
 
-Every script referenced below lives under `.agents/acceptance/scripts/`, including
-the generic capture toolchain (`report-init.sh`, `cdp-screenshot.sh`,
-`record-gif.sh`, `check-screen-recording.sh`, …).
+Project helpers live under `.agents/acceptance/scripts/` (`report-init.sh`,
+`record-gif.sh`, environment/auth/probe scripts, …). The portable
+`cdp-screenshot.sh`, `cdp-capture.cjs`, and `check-screen-recording.sh` live in
+`.agents/skills/acceptance/scripts/`; invoke shell helpers with `bash`. See the
+skill's `references/screenshot-helpers.md` for platform requirements and exit codes.
+The old project paths remain compatibility wrappers.
 
 ## 1. Project summary
 
@@ -354,7 +357,7 @@ in `.agents/acceptance/references/agent-gateway.md`.
 - **OS-capture surfaces are macOS-only** (bot channels, `capture-app-window.sh`,
   osascript screenshots): they come out black without Screen Recording (TCC)
   permission or when the display is asleep/locked. CDP-based evidence
-  (`agent-browser screenshot`, `.agents/acceptance/scripts/cdp-screenshot.sh`) is
+  (`agent-browser screenshot`, `bash .agents/skills/acceptance/scripts/cdp-screenshot.sh`) is
   unaffected. Electron runs on Linux/cloud only under `xvfb-run`, and there OS
   capture does not work — prefer CDP evidence for cloud-portable runs.
 

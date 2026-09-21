@@ -8,6 +8,9 @@
     "./manifests": "./src/manifests.ts"
   },
   "main": "./src/index.ts",
+  "scripts": {
+    "bundle:acceptance-scripts": "node scripts/bundle-acceptance-scripts.mjs"
+  },
   "dependencies": {
     "@lobechat/artifact-template": "workspace:*"
   },

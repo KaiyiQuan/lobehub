@@ -29,7 +29,7 @@ OUTPUT="${2:?Usage: capture-app-window.sh <process_name> <output_path>}"
 # remediation instead of silently writing a black artifact. Set SKIP_SCREEN_CHECK=1 to bypass.
 if [ "${SKIP_SCREEN_CHECK:-0}" != "1" ]; then
   SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-  if ! "$SCRIPT_DIR/check-screen-recording.sh"; then
+  if ! bash "$SCRIPT_DIR/../../skills/acceptance/scripts/check-screen-recording.sh"; then
     echo "[capture] Aborting: OS screen capture would be black. Fix the above, or wrap the run in 'caffeinate -dimsu' to keep the display awake." >&2
     exit 1
   fi

@@ -16,17 +16,31 @@ const readMarkdownBundle = (directory: string): string =>
     })
     .join('\n');
 
-const listMarkdown = (directory: string): string[] =>
+const listResources = (directory: string): string[] =>
   readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const filePath = path.join(directory, entry.name);
-    if (entry.isDirectory()) return listMarkdown(filePath);
-    return entry.name.endsWith('.md') ? [path.relative(skillDir, filePath)] : [];
+    if (entry.isDirectory()) return listResources(filePath);
+    const relativePath = path.relative(skillDir, filePath).split(path.sep).join('/');
+    return entry.name.endsWith('.md') || relativePath.startsWith('scripts/') ? [relativePath] : [];
   });
 
 const skillContent = readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
 const skillBundle = readMarkdownBundle(skillDir);
 
 describe('AcceptanceSkill', () => {
+  it('bundles the complete screenshot helper chain as runnable source', () => {
+    for (const file of [
+      'scripts/cdp-screenshot.sh',
+      'scripts/cdp-capture.cjs',
+      'scripts/image-brightness.sh',
+      'scripts/check-screen-recording.sh',
+    ]) {
+      const resource = AcceptanceSkill.resources?.[file];
+      expect(resource, `${file} must be included in CLI installs`).toBeDefined();
+      expect(resource?.content).toBe(readFileSync(path.join(skillDir, file), 'utf8'));
+    }
+  });
+
   it('exposes only the acceptance path in user-facing handoff guidance', () => {
     const internalRunPath = ['', 'verify'].join('/');
 
@@ -37,11 +51,11 @@ describe('AcceptanceSkill', () => {
     );
   });
 
-  it('ships every reference on disk — an unregistered file never reaches a builder', () => {
+  it('ships every reference and script on disk — an unregistered file never reaches a builder', () => {
     // The bundle is built from `resources`, not from the directory: a reference
     // added to the folder but not registered here is invisible to every puller
     // while still looking present in the repo.
-    const onDisk = listMarkdown(skillDir)
+    const onDisk = listResources(skillDir)
       .filter((file) => file !== 'SKILL.md')
       .sort();
 

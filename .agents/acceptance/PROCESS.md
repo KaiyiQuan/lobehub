@@ -131,7 +131,7 @@ regardless.
 6. **Screen-recording preflight, only for OS-capture surfaces.** macOS
    `screencapture`/osascript returns a fully black frame when Screen Recording
    permission is missing _or_ the display is asleep. Gate on
-   `.agents/acceptance/scripts/check-screen-recording.sh` (exit 0 = safe), and keep
+   `bash .agents/skills/acceptance/scripts/check-screen-recording.sh` (exit 0 = permission granted and a non-black frame measured; exit 2 = unverified), and keep
    the display awake for the session with `caffeinate -dimsu &`. CDP capture
    (`agent-browser screenshot`, `cdp-screenshot.sh`, `record-app-screen.sh`) is
    unaffected.
@@ -192,7 +192,10 @@ will not take the intended path, call the server endpoint directly.
 ### Step 4 — Run
 
 Project scripts live in `.agents/acceptance/scripts/` and are described in
-`PROJECT.md` §5. The generic capture toolchain:
+`PROJECT.md` §5. The CDP screenshot and screen-recording preflight helpers below
+ship in `.agents/skills/acceptance/scripts/` and are invoked with `bash`; the
+remaining tools are project helpers. See the skill's `references/screenshot-helpers.md`
+for dependencies and undetermined/unsupported exit codes. The capture toolchain:
 
 | Script                      | Use                                                                 |
 | --------------------------- | ------------------------------------------------------------------- |

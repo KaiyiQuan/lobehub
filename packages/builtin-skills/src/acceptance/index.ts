@@ -15,6 +15,8 @@ import recordingCdp from './references/recording-cdp.md';
 import recordingIosSimulator from './references/recording-ios-simulator.md';
 import recordingNativeMacos from './references/recording-native-macos.md';
 import report from './references/report.md';
+import screenshotHelpers from './references/screenshot-helpers.md';
+import scriptResources from './scriptResources.generated.json';
 import content from './SKILL.md';
 import cli from './surfaces/cli.md';
 import electron from './surfaces/electron.md';
@@ -44,9 +46,11 @@ export const AcceptanceIdentifier = 'acceptance';
  * manuals. Authentication and recording resources are split by runtime so a
  * selected surface never needs to load another platform's instructions.
  *
- * Resource keys keep the `.md` extension so a disk pull
- * (`.agents/skills/acceptance/references/*.md`) maps 1:1 to real files and the
- * in-SKILL relative links resolve.
+ * Resource keys preserve filenames so disk installs resolve relative links and
+ * helper imports. Scripts are embedded as generated JSON to avoid executing them
+ * or relying on runtime source files/raw-script loaders in application bundles.
+ * Regenerate with `pnpm --filter @lobechat/builtin-skills bundle:acceptance-scripts`;
+ * tests compare the embedded bytes with the executable sources.
  *
  * `version` is read from SKILL.md's own frontmatter rather than declared here,
  * so there is one place to bump and an installed copy on disk always states the
@@ -62,6 +66,7 @@ export const AcceptanceSkill: BuiltinSkill = {
   identifier: AcceptanceIdentifier,
   name: 'acceptance',
   resources: toResourceMeta({
+    ...scriptResources,
     'references/acceptance-checker.md': acceptanceChecker,
     'references/agent-browser.md': agentBrowser,
     'references/common-mistakes.md': commonMistakes,
@@ -76,6 +81,7 @@ export const AcceptanceSkill: BuiltinSkill = {
     'references/recording-ios-simulator.md': recordingIosSimulator,
     'references/recording-native-macos.md': recordingNativeMacos,
     'references/report.md': report,
+    'references/screenshot-helpers.md': screenshotHelpers,
     'surfaces/cli.md': cli,
     'surfaces/electron.md': electron,
     'surfaces/ios-simulator.md': iosSimulator,

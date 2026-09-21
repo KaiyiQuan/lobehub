@@ -74,7 +74,7 @@ Screen Recording (TCC) permission is missing OR the display is asleep / locked /
 on a screensaver. Gate BEFORE any bot capture:
 
 ```bash
-./.agents/acceptance/scripts/check-screen-recording.sh # exit 0 = OS capture will work
+bash .agents/skills/acceptance/scripts/check-screen-recording.sh # exit 0 = OS capture will work
 ```
 
 Keep the display awake for the whole capture session (`caffeinate -dimsu &`, kill

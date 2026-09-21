@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -1387,6 +1388,49 @@ describe('lh acceptance — canonical run tree', () => {
       readFileSync(path.join(dir, '.agents', 'skills', 'acceptance', 'SKILL.md'), 'utf8'),
     ).toContain('version: 1.0.0');
     rmSync(dir, { force: true, recursive: true });
+  });
+
+  it('installs screenshot helpers that run without executable bits or repository dependencies', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'acceptance-scripts-'));
+    const sources = path.resolve(
+      import.meta.dirname,
+      '../../../../packages/builtin-skills/src/acceptance/scripts',
+    );
+    const files = Object.fromEntries(
+      [
+        'cdp-screenshot.sh',
+        'cdp-capture.cjs',
+        'image-brightness.sh',
+        'check-screen-recording.sh',
+      ].map((name) => [`scripts/${name}`, readFileSync(path.join(sources, name), 'utf8')]),
+    );
+    mockTrpcClient.verify.getSkillBundle.query.mockReset().mockResolvedValue({
+      content: '# Acceptance SKILL',
+      files,
+      identifier: 'acceptance',
+      name: 'acceptance',
+    });
+    try {
+      await run(['install', '--dir', dir]);
+      const skillDir = path.join(dir, '.agents/skills/acceptance');
+      for (const [relative, content] of Object.entries(files)) {
+        expect(readFileSync(path.join(skillDir, relative), 'utf8')).toBe(content);
+      }
+      const result = spawnSync(
+        'bash',
+        [path.join(skillDir, 'scripts/cdp-screenshot.sh'), '--port', 'invalid'],
+        {
+          cwd: dir,
+          encoding: 'utf8',
+          env: { ...process.env, NODE_PATH: '' },
+          timeout: 5000,
+        },
+      );
+      expect(result.status).toBe(5);
+      expect(JSON.parse(result.stdout)).toMatchObject({ ok: false, error: 'Invalid --port.' });
+    } finally {
+      rmSync(dir, { force: true, recursive: true });
+    }
   });
 
   it('removes stale materialized resources on `acceptance update`', async () => {

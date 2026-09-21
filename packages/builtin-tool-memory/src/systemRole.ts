@@ -22,7 +22,7 @@ Memory effort level: {{memory_effort}}
 
 <routing_boundaries>
 - Do **not** use memory tools for requests to create, update, refine, merge, consolidate, or store reusable skills, procedures, workflows, playbooks, checklists, agent capabilities, agent prompts, or agent documents.
-- If the user asks for a "reusable skill", "future workflow", "PR review checklist skill", "agent capability", or similar operational artifact, leave it to the skill/document management path. Do not convert it into addPreferenceMemory, addExperienceMemory, or addContextMemory.
+- If the user asks for a "reusable skill", "future workflow", "PR review checklist skill", "agent capability", or similar operational artifact, leave it to the skill/document management path. Do not convert it into addPreferenceMemory or addContextMemory.
 - The same boundary applies in Chinese. Requests about "复用 skill", "可复用流程", "review 流程", "检查清单", "下次参考这个流程", "保留这个流程", or "合并/更新清单" belong to skill/workflow management unless they also contain a separate personal preference.
 - If recent evidence includes an agent document or tool outcome marked hintIsSkill=true, treat that as skill/document evidence, not memory evidence.
 - Preference memory is only for durable user preferences about how the assistant should behave; it is not a replacement for executable or document-like procedures.
@@ -37,7 +37,6 @@ Memory effort level: {{memory_effort}}
 - **searchUserMemory time rule**: Prefer \`timeIntent\` for relative or calendar expressions. Example: "December 2025" → \`{ "timeIntent": { "selector": "month", "year": 2025, "month": 12 } }\`, "yesterday" → \`{ "timeIntent": { "selector": "yesterday" } }\`, "3 days after December 15 2025" → \`{ "timeIntent": { "selector": "relativeDay", "anchor": { "selector": "day", "date": "2025-12-15T00:00:00.000Z" }, "offsetDays": 3 } }\`. \`timeIntent\` always resolves to a \`createdAt\` time range on the server, so do not add or infer a field inside \`timeIntent\`. Use \`timeRange\` only when exact boundaries are already known.
 - **addActivityMemory**: title, summary, details?, withActivity → Capture time-bound events (what happened, when/where, who/what was involved, and how it felt).
 - **addContextMemory**: title, summary, details?, withContext → Capture ongoing situations (actors, resources, status, urgency/impact, description, tags).
-- **addExperienceMemory**: title, summary, details?, withExperience → Record Situation → Reasoning → Action → Outcome narratives and confidence.
 - **addIdentityMemory**: title, summary, details?, withIdentity → Store enduring identity facts, relationships, roles, and evidence.
 - **addPreferenceMemory**: title, summary, details?, withPreference → Persist durable directives and scopes the assistant should follow.
 - **updateIdentityMemory**: id, mergeStrategy, set → Merge or replace existing identity entries with refined information.

@@ -24,12 +24,8 @@ import { appendHourlyWorkflowRunId, isHourlyMemoryExtractionCancelled } from './
 const { upstashWorkflowExtraHeaders } = parseMemoryExtractionConfig();
 const WORKFLOW_PATH = 'api/workflows/memory-user-memory/pipelines/chat-topic/process-topics';
 
-const CEPA_LAYERS: LayersEnum[] = [
-  LayersEnum.Context,
-  LayersEnum.Experience,
-  LayersEnum.Preference,
-  LayersEnum.Activity,
-];
+// Experience extraction is retired — see processTopic.ts.
+const CEPA_LAYERS: LayersEnum[] = [LayersEnum.Context, LayersEnum.Preference, LayersEnum.Activity];
 const IDENTITY_LAYERS: LayersEnum[] = [LayersEnum.Identity];
 
 export const processTopicsHandler = (context: WorkflowContext<MemoryExtractionPayloadInput>) =>

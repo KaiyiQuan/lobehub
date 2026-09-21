@@ -782,16 +782,6 @@ export const sharedMainAreaChildren: RouteObject[] = [
       },
       {
         element: dynamicElement(
-          () => import('@/routes/(main)/memory/experiences'),
-          'Desktop > Memory > Experiences',
-        ),
-        handle: {
-          meta: routeMeta({ icon: BrainCircuit, titleKey: 'navigation.memoryExperiences' }),
-        },
-        path: 'experiences',
-      },
-      {
-        element: dynamicElement(
           () => import('@/routes/(main)/memory/activities'),
           'Desktop > Memory > Activities',
         ),

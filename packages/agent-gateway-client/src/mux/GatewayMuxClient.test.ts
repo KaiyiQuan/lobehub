@@ -953,4 +953,172 @@ describe('GatewayMuxClient', () => {
       expect(sub.active).toBe(true);
     });
   });
+
+  describe('unavailable (fallback to v1)', () => {
+    it('gives up after maxDialFailures dials that never reach ready', async () => {
+      const { getToken, mux } = createMux();
+      const sub = mux.subscribe('op-1');
+      const onUnavailable = vi.fn();
+      mux.on('unavailable', onUnavailable);
+
+      let ws = await settle();
+      ws.simulateClose(1006);
+      await vi.advanceTimersByTimeAsync(500); // attempt 1: 0.5 * 1000 cap
+      ws = await settle();
+      ws.simulateClose(1006);
+      await vi.advanceTimersByTimeAsync(1000); // attempt 2: 0.5 * 2000 cap
+      ws = await settle();
+      expect(onUnavailable).not.toHaveBeenCalled();
+      ws.simulateClose(1006);
+
+      expect(onUnavailable).toHaveBeenCalledOnce();
+      expect(mux.isUnavailable).toBe(true);
+      // The owner re-establishes the run on v1, so the subscription must not be
+      // ended here — a terminal signal would complete the operation instead.
+      expect(sub.active).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mockWsInstances).toHaveLength(3);
+      expect(getToken).toHaveBeenCalledTimes(3);
+    });
+
+    it('gives up when the token cannot be minted at all', async () => {
+      const getToken = vi.fn().mockRejectedValue(new Error('404 issueGatewayUserToken'));
+      const { mux } = createMux({ getToken });
+      mux.on('error', () => {});
+      const onUnavailable = vi.fn();
+      mux.on('unavailable', onUnavailable);
+      mux.subscribe('op-1');
+
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(onUnavailable).toHaveBeenCalledOnce();
+      expect(mockWsInstances).toHaveLength(0);
+    });
+
+    it('turns a terminal 4401 into unavailable instead of failing the runs', async () => {
+      const { mux } = createMux();
+      const sub = mux.subscribe('op-1');
+      const onAuthFailed = vi.fn();
+      const onUnavailable = vi.fn();
+      sub.on('auth_failed', onAuthFailed);
+      mux.on('unavailable', onUnavailable);
+
+      let ws = await connectAndReady(mux);
+      ws.simulateClose(4401, 'auth_failed');
+      ws = await settle();
+      ws.simulateClose(4401, 'auth_failed');
+      ws = await settle();
+      ws.simulateClose(4401, 'auth_failed');
+
+      expect(onUnavailable).toHaveBeenCalledWith('auth_failed');
+      expect(onAuthFailed).not.toHaveBeenCalled();
+      expect(sub.active).toBe(true);
+    });
+
+    it('keeps retrying forever when nothing listens for unavailable', async () => {
+      const { mux } = createMux();
+      mux.subscribe('op-1');
+
+      let ws = await settle();
+      ws.simulateClose(1006);
+      await vi.advanceTimersByTimeAsync(500);
+      ws = await settle();
+      ws.simulateClose(1006);
+      await vi.advanceTimersByTimeAsync(1000);
+      ws = await settle();
+      ws.simulateClose(1006);
+      await vi.advanceTimersByTimeAsync(2000);
+      await settle();
+
+      expect(mux.isUnavailable).toBe(false);
+      expect(mockWsInstances).toHaveLength(4);
+    });
+
+    it('does not spend the budget on a healthy socket that drops', async () => {
+      const { mux } = createMux();
+      const onUnavailable = vi.fn();
+      mux.on('unavailable', onUnavailable);
+      mux.subscribe('op-1');
+
+      // A working connection that later drops is a network event, not evidence
+      // that this deployment cannot serve v2.
+      let ws = await connectAndReady(mux);
+      ws.simulateClose(1006);
+      await vi.advanceTimersByTimeAsync(500);
+      ws = await settle();
+      ws.simulateClose(1006);
+      await vi.advanceTimersByTimeAsync(1000);
+      ws = await settle();
+      ws.simulateClose(1006);
+      expect(onUnavailable).not.toHaveBeenCalled();
+
+      // Three dials that never reached `ready` do spend it.
+      await vi.advanceTimersByTimeAsync(2000);
+      ws = await settle();
+      ws.simulateClose(1006);
+      expect(onUnavailable).toHaveBeenCalledOnce();
+    });
+
+    it('counts token failures that follow a healthy socket', async () => {
+      // The server can lose `issueGatewayUserToken` under the client (a bundle
+      // deployed ahead of its server). Minting is part of the dial, so those
+      // attempts have to spend the budget like any other failed dial.
+      const getToken = vi
+        .fn()
+        .mockResolvedValueOnce('tok')
+        .mockRejectedValue(new Error('404 issueGatewayUserToken'));
+      const { mux } = createMux({ getToken });
+      mux.on('error', () => {});
+      const onUnavailable = vi.fn();
+      mux.on('unavailable', onUnavailable);
+      mux.subscribe('op-1');
+
+      const ws = await connectAndReady(mux);
+      ws.simulateClose(1006);
+      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(onUnavailable).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(onUnavailable).toHaveBeenCalledOnce();
+    });
+
+    it('does not spend the budget on token refreshes', async () => {
+      const { mux } = createMux();
+      const onUnavailable = vi.fn();
+      mux.on('unavailable', onUnavailable);
+      mux.subscribe('op-1');
+
+      // Two 4401 refreshes (their own budget) then one ordinary failure must
+      // not add up to the dial budget.
+      let ws = await settle();
+      ws.simulateClose(4401);
+      ws = await settle();
+      ws.simulateClose(4401);
+      ws = await settle();
+      ws.simulateClose(1006);
+
+      expect(onUnavailable).not.toHaveBeenCalled();
+    });
+
+    it('rejects connect() once unavailable', async () => {
+      const { mux } = createMux();
+      mux.on('unavailable', () => {});
+      mux.subscribe('op-1');
+
+      let ws = await settle();
+      ws.simulateClose(1006);
+      await vi.advanceTimersByTimeAsync(500);
+      ws = await settle();
+      ws.simulateClose(1006);
+      await vi.advanceTimersByTimeAsync(1000);
+      ws = await settle();
+      ws.simulateClose(1006);
+
+      await expect(mux.connect()).rejects.toThrow('unavailable');
+    });
+  });
 });

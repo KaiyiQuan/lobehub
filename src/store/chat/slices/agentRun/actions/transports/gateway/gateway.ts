@@ -27,6 +27,7 @@ import {
   getRuntimeCanManageAgent,
 } from '@/helpers/agentManagementAccess';
 import { resolveExecutionTarget, resolveWorkspaceScoped } from '@/helpers/executionTarget';
+import { trackProductUsageEvent } from '@/libs/analytics/productUsageEvent';
 import {
   aiAgentService,
   type ResumeApprovalParam,
@@ -62,7 +63,12 @@ import { createGatewayEventBuffer } from './gatewayEventBuffer';
 import { createGatewayEventHandler, isCompletedRuntimeEnd } from './gatewayEventHandler';
 import { createGatewayEventRouter } from './gatewayEventRouter';
 import { createGatewayMemberStreamHandler } from './gatewayMemberStreamHandler';
-import { type GatewayMuxIdentity, getGatewayMux } from './muxRegistry';
+import {
+  type GatewayMuxIdentity,
+  getGatewayMux,
+  isGatewayMuxUnavailable,
+  markGatewayMuxUnavailable,
+} from './muxRegistry';
 import { flagQueuedMessagesOnRunStart, syncQueuedMessagesFlag } from './queuedMessagesFlag';
 
 const getGatewayServerConfig = () =>
@@ -308,6 +314,18 @@ export class GatewayActionImpl {
   /** Muxes whose `lifecycle` stream already feeds `gatewayFeed`. */
   readonly #feedAttachedMuxes = new WeakSet<GatewayMuxClient>();
 
+  /** Muxes already wired to re-establish their operations on v1. */
+  readonly #fallbackAttachedMuxes = new WeakSet<GatewayMuxClient>();
+
+  /**
+   * How to re-establish each mux-backed operation on the v1 transport, kept
+   * per live connection so a mux that gives up mid-run can hand its runs over
+   * instead of leaving them without a stream. Tagged with the mux it rides on,
+   * because the owner and share-visitor identities have separate sockets and
+   * only the failing one's operations move.
+   */
+  readonly #muxFallbacks = new Map<string, { mux: GatewayMuxClient; redial: () => void }>();
+
   constructor(set: Setter, get: () => ChatStore, _api?: unknown) {
     void _api;
     this.#set = set;
@@ -340,6 +358,39 @@ export class GatewayActionImpl {
   };
 
   /**
+   * Hand every operation on this mux back to the v1 per-operation socket once
+   * the mux declares protocol v2 unusable.
+   *
+   * Attached once per mux. `connectToGateway` is re-entered with the original
+   * params, and `isGatewayMuxUnavailable` now routes it to `createClient`, so
+   * the run keeps the same handlers and resumes from the server's buffer
+   * instead of surfacing as a stalled stream.
+   */
+  #attachMuxFallback = (mux: GatewayMuxClient, identity: GatewayMuxIdentity): void => {
+    if (this.#fallbackAttachedMuxes.has(mux)) return;
+    this.#fallbackAttachedMuxes.add(mux);
+    mux.on('unavailable', (reason) => {
+      markGatewayMuxUnavailable(identity);
+      const affected = [...this.#muxFallbacks.entries()].filter(
+        ([, entry]) => entry.mux === mux,
+      );
+      for (const [operationId] of affected) this.#muxFallbacks.delete(operationId);
+      // Telemetry must never be what keeps a run from recovering.
+      void trackProductUsageEvent({
+        name: 'gateway_transport_fallback',
+        properties: { operation_count: affected.length, reason },
+      }).catch(() => {});
+      for (const [, entry] of affected) {
+        try {
+          entry.redial();
+        } catch (error) {
+          console.error('[Gateway] failed to fall back to the v1 transport:', error);
+        }
+      }
+    });
+  };
+
+  /**
    * Connect to the Agent Gateway for a specific operation.
    * Creates an AgentStreamClient, manages its lifecycle, and wires up event callbacks.
    */
@@ -363,15 +414,25 @@ export class GatewayActionImpl {
     // not inherit the creator's Labs preference. Owner runs keep the existing
     // opt-in rollout: a connection keeps the transport it was opened with
     // even if the toggle flips mid-run.
+    const muxIdentity: GatewayMuxIdentity = { agentShareId, gatewayUrl };
     const useGatewayMux =
-      Boolean(agentShareId) || labPreferSelectors.enableGatewayMux(useUserStore.getState());
+      (Boolean(agentShareId) || labPreferSelectors.enableGatewayMux(useUserStore.getState())) &&
+      !isGatewayMuxUnavailable(muxIdentity);
     let muxClient: OperationClient | undefined;
     if (useGatewayMux) {
-      const mux = this.resolveGatewayMux({ agentShareId, gatewayUrl });
+      const mux = this.resolveGatewayMux(muxIdentity);
       this.#attachGatewayFeed(mux);
+      this.#attachMuxFallback(mux, muxIdentity);
       // The mux mints its own token via `getToken` on every dial, so `token`
       // is unused here and `auth_expired` never fires on this client.
       muxClient = this.createMuxClient(mux, operationId, { executor, resumeOnConnect });
+      // Re-establishing on v1 always resumes: the run has been executing on the
+      // server the whole time the mux was failing to reach it, so a fresh
+      // subscribe would skip everything it missed.
+      this.#muxFallbacks.set(operationId, {
+        mux,
+        redial: () => this.connectToGateway({ ...params, resumeOnConnect: true }),
+      });
     }
     const client: GatewayConnection['client'] =
       muxClient ?? this.createClient({ gatewayUrl, operationId, resumeOnConnect, token });
@@ -578,8 +639,12 @@ export class GatewayActionImpl {
     const serverConfig = getGatewayServerConfig();
     if (!serverConfig?.agentGatewayUrl || !serverConfig.enableGatewayMode) return;
 
-    const mux = this.resolveGatewayMux({ gatewayUrl: serverConfig.agentGatewayUrl });
+    const identity: GatewayMuxIdentity = { gatewayUrl: serverConfig.agentGatewayUrl };
+    if (isGatewayMuxUnavailable(identity)) return;
+
+    const mux = this.resolveGatewayMux(identity);
     this.#attachGatewayFeed(mux);
+    this.#attachMuxFallback(mux, identity);
     mux.connect().catch(() => {
       // The mux keeps retrying with backoff; failures surface on its own
       // `error` / `reconnecting` listeners.
@@ -1696,6 +1761,7 @@ export class GatewayActionImpl {
   };
 
   private internal_cleanupGatewayConnection = (operationId: string): void => {
+    this.#muxFallbacks.delete(operationId);
     this.#set(
       (state) => {
         const { [operationId]: _, ...rest } = state.gatewayConnections;

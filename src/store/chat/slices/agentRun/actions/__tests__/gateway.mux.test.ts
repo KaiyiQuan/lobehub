@@ -49,6 +49,7 @@ const mockUserState = vi.hoisted(() => ({
 }));
 
 vi.mock('@/store/user', () => ({
+  getUserStoreState: vi.fn(() => mockUserState),
   useUserStore: { getState: vi.fn(() => mockUserState) },
 }));
 
@@ -56,6 +57,7 @@ vi.mock('@/store/user/selectors', () => ({
   labPreferSelectors: { enableGatewayMux: () => mockLab.enableGatewayMux },
   settingsSelectors: { defaultAgentConfig: () => ({ chatConfig: {} }) },
   toolInterventionSelectors: { allowList: () => [], approvalMode: () => 'manual' },
+  userGeneralSettingsSelectors: { telemetry: () => false },
   userProfileSelectors: { userId: (state: typeof mockUserState) => state.profile.id },
 }));
 
@@ -362,6 +364,64 @@ describe('GatewayActionImpl (enableGatewayMux lab)', () => {
       expect(muxClient.updateToken).not.toHaveBeenCalled();
       expect(aiAgentService.refreshGatewayToken).not.toHaveBeenCalled();
       expect(state.gatewayConnections['op-1'].status).toBe('connecting');
+    });
+  });
+
+  describe('fallback to v1 when the mux is unavailable', () => {
+    const connectParams = (operationId: string) => ({
+      executor: true,
+      gatewayUrl: GATEWAY_URL,
+      operationId,
+      token: 'tok',
+      topicId: 'topic-1',
+    });
+
+    it('re-establishes every live operation on the v1 socket, resuming', () => {
+      const { action, mux, state, v1Client } = createTestAction();
+
+      action.connectToGateway(connectParams('op-1'));
+      action.connectToGateway(connectParams('op-2'));
+      expect(action.createClient).not.toHaveBeenCalled();
+
+      mux.emit('unavailable', 'no usable connection after 3 attempts');
+
+      expect(action.createClient).toHaveBeenCalledTimes(2);
+      expect(action.createClient).toHaveBeenNthCalledWith(1, {
+        gatewayUrl: GATEWAY_URL,
+        operationId: 'op-1',
+        // The run kept executing on the server while the mux was failing, so a
+        // fresh subscribe would skip everything it missed.
+        resumeOnConnect: true,
+        token: 'tok',
+      });
+      expect(v1Client.connect).toHaveBeenCalledTimes(2);
+      expect(state.gatewayConnections['op-1'].client).toBe(v1Client);
+      expect(state.gatewayConnections['op-2'].client).toBe(v1Client);
+    });
+
+    it('sends later connects straight to v1 without touching the mux again', () => {
+      const { action, mux } = createTestAction();
+
+      action.connectToGateway(connectParams('op-1'));
+      mux.emit('unavailable', 'auth_failed');
+      vi.mocked(action.createMuxClient).mockClear();
+
+      action.connectToGateway(connectParams('op-2'));
+
+      expect(action.createMuxClient).not.toHaveBeenCalled();
+      expect(action.createClient).toHaveBeenCalledWith(
+        expect.objectContaining({ operationId: 'op-2' }),
+      );
+    });
+
+    it('leaves a completed operation alone', () => {
+      const { action, mux } = createTestAction();
+
+      action.connectToGateway(connectParams('op-1'));
+      action.disconnectFromGateway('op-1');
+      mux.emit('unavailable', 'auth_failed');
+
+      expect(action.createClient).not.toHaveBeenCalled();
     });
   });
 

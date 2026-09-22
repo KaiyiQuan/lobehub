@@ -113,6 +113,18 @@ describe('project directory queries', () => {
     await expect(other.listTopics(directory.id)).rejects.toThrow();
   });
 
+  it('keeps agentless conversations visible in directory listings', async () => {
+    const directory = await repo.bind(base);
+    const topic = await new TopicModel(db, userId).create({
+      projectId: base.projectId,
+      projectWorkingDirectoryId: directory.id,
+      title: 'Agentless',
+    });
+    expect(await model.listTopics(directory.id)).toEqual([
+      expect.objectContaining({ agentId: null, agentTitle: null, id: topic.id }),
+    ]);
+  });
+
   it('returns the project icon and leading agent metadata with directory topics', async () => {
     await db.update(projects).set({ avatar: '📦' }).where(eq(projects.id, base.projectId));
     await db

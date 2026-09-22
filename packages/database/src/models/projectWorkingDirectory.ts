@@ -99,7 +99,10 @@ export class ProjectWorkingDirectoryModel {
         instanceId: environmentInstances.id,
         environmentId: environments.id,
         environmentName: environments.name,
-        configuration: environments.configuration,
+        // The materialized instance's snapshot, not the live environment
+        // definition — the snapshot is never implicitly refreshed, so it is
+        // the configuration the instance actually represents.
+        configuration: environmentInstances.configurationSnapshot,
         deviceId: devices.deviceId,
         deviceName: devices.friendlyName,
         platform: devices.platform,
@@ -183,12 +186,14 @@ export class ProjectWorkingDirectoryModel {
         updatedAt: topics.updatedAt,
       })
       .from(topics)
-      .innerJoin(agents, eq(agents.id, topics.agentId))
+      .leftJoin(
+        agents,
+        and(eq(agents.id, topics.agentId), buildWorkspaceWhere(this.scope(), agents)),
+      )
       .where(
         and(
           eq(topics.projectWorkingDirectoryId, directoryId),
           buildWorkspaceWhere(this.scope(), topics),
-          buildWorkspaceWhere(this.scope(), agents),
           isNull(topics.deletedAt),
         ),
       )

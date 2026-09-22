@@ -540,4 +540,15 @@ describe('ProjectModel', () => {
     });
     await expect(otherModel.listTopics(project.id)).rejects.toThrow('access denied');
   });
+
+  it('keeps agentless conversations visible in project listings', async () => {
+    const project = await createProject(model, { name: 'Agentless host' });
+    const topic = await new TopicModel(serverDB, userId).create({
+      projectId: project.id,
+      title: 'Agentless',
+    });
+    expect(await model.listTopics(project.id)).toEqual([
+      expect.objectContaining({ agentId: null, agentTitle: null, id: topic.id }),
+    ]);
+  });
 });

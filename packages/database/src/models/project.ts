@@ -692,12 +692,11 @@ export class ProjectModel {
         projectWorkingDirectoryId: topics.projectWorkingDirectoryId,
       })
       .from(topics)
-      .innerJoin(agents, eq(agents.id, topics.agentId))
+      .leftJoin(agents, and(eq(agents.id, topics.agentId), buildWorkspaceWhere(scope, agents)))
       .where(
         and(
           eq(topics.projectId, projectId),
           buildWorkspaceWhere(scope, topics),
-          buildWorkspaceWhere(scope, agents),
           isNull(topics.deletedAt),
         ),
       )

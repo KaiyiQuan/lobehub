@@ -117,6 +117,21 @@ describe('ProjectDirectoryRepository.bind', () => {
     expect(await directoryModel.list()).toHaveLength(2);
   });
 
+  it('resolves the instance configuration snapshot, not later environment edits', async () => {
+    const directory = await repo.bind({
+      ...base,
+      repositoryUrl: 'https://github.com/lobehub/lobehub',
+    });
+    const row = await directoryModel.resolve(directory.id);
+    await db
+      .update(environments)
+      .set({ configuration: { sources: [{ kind: 'git', url: 'https://github.com/other/repo' }] } })
+      .where(eq(environments.id, row.environmentId));
+    expect((await directoryModel.resolve(directory.id)).configuration).toEqual({
+      sources: [{ kind: 'git', url: 'https://github.com/lobehub/lobehub' }],
+    });
+  });
+
   it('does not expose or change another user’s project or device', async () => {
     await repo.bind(base);
     await expect(otherRepo.bind(base)).rejects.toThrow('access denied');

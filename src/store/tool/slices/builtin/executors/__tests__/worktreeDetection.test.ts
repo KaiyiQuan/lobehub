@@ -1083,3 +1083,175 @@ describe('recordGitCommandEffects — git push', () => {
     expect(swrMocks.mutate).toHaveBeenCalledWith(['device:gitBranch', 'local', '/repo']);
   });
 });
+
+describe('recordGitCommandEffects — the checkout the command ran in', () => {
+  const WORKTREE_TOPIC = {
+    metadata: {
+      workingDirectoryConfig: {
+        git: {
+          activeWorktree: '/private/tmp/cloud-wt',
+          branch: 'fix/cloud',
+          github: {
+            pullRequest: {
+              number: 1781,
+              state: 'OPEN',
+              title: 'cloud fix',
+              url: 'https://github.com/lobehub/cloud/pull/1781',
+            },
+            pullRequestStatus: 'ok',
+          },
+          isWorktree: true,
+        },
+        path: '/repo',
+        repoType: 'github',
+      },
+    },
+  };
+
+  it('drops the recorded worktree once the work moves back to the source repo', async () => {
+    chatMocks.topics = { t1: WORKTREE_TOPIC };
+
+    await recordGitCommandEffects({ command: 'git checkout -q -b feat/next', topicId: 't1' });
+
+    // The worktree's branch and PR described the worktree, not the source repo.
+    expect(chatMocks.updateTopicMetadata).toHaveBeenCalledWith('t1', {
+      workingDirectoryConfig: {
+        git: { branch: 'feat/next', isWorktree: false },
+        path: '/repo',
+        repoType: 'github',
+      },
+    });
+  });
+
+  it('records nothing for work done in another repository', async () => {
+    chatMocks.topics = { t1: WORKTREE_TOPIC };
+    gitServiceMocks.listGitWorktrees.mockResolvedValue([
+      { branch: 'canary', current: true, path: '/repo' },
+      { branch: 'fix/cloud', current: false, path: '/private/tmp/cloud-wt' },
+    ]);
+
+    await recordGitCommandEffects({
+      command: 'cd /other-repo && git worktree add /private/tmp/other-wt -b fix/other origin/main',
+      topicId: 't1',
+    });
+
+    expect(chatMocks.updateTopicMetadata).not.toHaveBeenCalled();
+  });
+
+  it('does not bind a PR opened from another repository', async () => {
+    chatMocks.topics = { t1: PR_TOPIC };
+    gitServiceMocks.listGitWorktrees.mockResolvedValue([
+      { branch: 'canary', current: true, path: '/repo' },
+    ]);
+
+    await recordGitCommandEffects({
+      command: 'cd /other-repo && gh pr create --title "Other repo"',
+      resultContent: 'https://github.com/lobehub/other/pull/7',
+      topicId: 't1',
+    });
+
+    expect(chatMocks.updateTopicMetadata).not.toHaveBeenCalled();
+  });
+
+  it('follows the agent into a linked worktree it only cds into', async () => {
+    chatMocks.topics = { t1: PR_TOPIC };
+    gitServiceMocks.listGitWorktrees.mockResolvedValue([
+      { branch: 'canary', current: true, path: '/repo' },
+      { branch: 'feat/x', current: false, path: '/repo-feat-x' },
+    ]);
+
+    await recordGitCommandEffects({
+      command: 'cd /repo-feat-x && git commit -m "wip"',
+      topicId: 't1',
+    });
+
+    expect(chatMocks.updateTopicMetadata).toHaveBeenCalledWith('t1', {
+      workingDirectoryConfig: {
+        git: { activeWorktree: '/repo-feat-x', isWorktree: true },
+        path: '/repo',
+        repoType: 'github',
+      },
+    });
+  });
+
+  it('reads the directory from git -C', async () => {
+    chatMocks.topics = { t1: PR_TOPIC };
+    gitServiceMocks.listGitWorktrees.mockResolvedValue([
+      { branch: 'feat/x', current: false, path: '/repo-feat-x' },
+    ]);
+
+    await recordGitCommandEffects({ command: 'git -C /repo-feat-x add -A', topicId: 't1' });
+
+    expect(chatMocks.updateTopicMetadata).toHaveBeenCalledWith('t1', {
+      workingDirectoryConfig: {
+        git: { activeWorktree: '/repo-feat-x', isWorktree: true },
+        path: '/repo',
+        repoType: 'github',
+      },
+    });
+  });
+
+  it('folds macOS /tmp and /private/tmp into one directory', async () => {
+    chatMocks.topics = { t1: PR_TOPIC };
+    gitServiceMocks.listGitWorktrees.mockResolvedValue([
+      { branch: 'feat/x', current: false, path: '/private/tmp/wt' },
+    ]);
+
+    await recordGitCommandEffects({ command: 'cd /tmp/wt && git commit -m x', topicId: 't1' });
+
+    expect(chatMocks.updateTopicMetadata).toHaveBeenCalledWith('t1', {
+      workingDirectoryConfig: {
+        git: { activeWorktree: '/private/tmp/wt', isWorktree: true },
+        path: '/repo',
+        repoType: 'github',
+      },
+    });
+  });
+
+  it('keeps the recorded worktree while the agent keeps working inside it', async () => {
+    chatMocks.topics = { t1: WORKTREE_TOPIC };
+
+    await recordGitCommandEffects({
+      command: 'cd /private/tmp/cloud-wt/src && git add -A',
+      topicId: 't1',
+    });
+
+    // Already the topic's worktree — no probe, and nothing changed.
+    expect(gitServiceMocks.listGitWorktrees).not.toHaveBeenCalled();
+    expect(chatMocks.updateTopicMetadata).not.toHaveBeenCalled();
+  });
+
+  it('ignores a read-only peek into another directory', async () => {
+    chatMocks.topics = { t1: WORKTREE_TOPIC };
+
+    await recordGitCommandEffects({
+      command: 'cd /other-repo && git status --porcelain',
+      topicId: 't1',
+    });
+
+    expect(gitServiceMocks.listGitWorktrees).not.toHaveBeenCalled();
+    expect(chatMocks.updateTopicMetadata).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the device cannot say which repo the directory belongs to', async () => {
+    chatMocks.topics = { t1: PR_TOPIC };
+    gitServiceMocks.listGitWorktrees.mockRejectedValue(new Error('device offline'));
+
+    await recordGitCommandEffects({
+      command: 'cd /elsewhere && git switch fix/topic',
+      resultContent: "Switched to branch 'fix/topic'",
+      topicId: 't1',
+    });
+
+    expect(chatMocks.updateTopicMetadata).not.toHaveBeenCalled();
+  });
+
+  it('leaves the topic alone when a cd target cannot be resolved', async () => {
+    chatMocks.topics = { t1: WORKTREE_TOPIC };
+
+    await recordGitCommandEffects({ command: 'cd "$WT" && git add -A', topicId: 't1' });
+
+    expect(gitServiceMocks.listGitWorktrees).not.toHaveBeenCalled();
+    expect(chatMocks.updateTopicMetadata).not.toHaveBeenCalled();
+  });
+});

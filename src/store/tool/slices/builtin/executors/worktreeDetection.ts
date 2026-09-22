@@ -915,6 +915,207 @@ export const parseWorktreeAddPath = (
 };
 
 /**
+ * `cd` is the only way a local CLI agent moves between checkouts: its session cwd
+ * stays anchored to the source repo (`conversationLifecycle`, `isLocalCliHetero`)
+ * and is restored after every tool call, so an excursion into a worktree is a
+ * per-command `cd`. Returns the directory the `cd` lands in, or a target-less
+ * result when it cannot be resolved statically (bare `cd` to home, `cd -`, an
+ * unexpanded `$VAR`) — tracking then goes unknown rather than carry a stale cwd.
+ */
+const parseCdTarget = (
+  tokens: string[],
+  cwd: string | undefined,
+  env?: ShellEnv,
+): { path?: string } | undefined => {
+  const start = consumeCommandPreamble(tokens);
+  if (stripQuotes(tokens[start] ?? '') !== 'cd') return undefined;
+
+  const arg = tokens.slice(start + 1).find((token) => !stripQuotes(token).startsWith('-'));
+  if (!arg) return {};
+
+  const target = resolveToken(arg, env);
+  if (!target || !isLiteralPath(target)) return {};
+  if (!isAbsolute(target) && !cwd) return {};
+
+  return { path: resolveWorktreePath(target, cwd) };
+};
+
+/**
+ * Visit each shell segment with the directory it actually runs in, following `cd`
+ * across `&&` / `;` chains. The argv form some CLIs use carries a single command
+ * with no separators, so it always runs in the session cwd.
+ */
+const walkCommandSegments = (
+  command: string | string[],
+  source: string,
+  visit: (tokens: string[], cwd?: string) => void,
+): void => {
+  if (Array.isArray(command)) {
+    if (!command.every((t) => typeof t === 'string')) return;
+    // A shell-wrapped argv carries a raw shell string as its payload — recurse so it
+    // gets the same separator splitting and `cd` tracking as the string form.
+    const wrapped = unwrapShellArgv(command);
+    if (wrapped !== undefined) return walkCommandSegments(wrapped, source, visit);
+    visit(command, source);
+    return;
+  }
+  if (typeof command !== 'string') return;
+
+  const env: ShellEnv = {};
+  let cwd: string | undefined = source;
+  for (const segment of unwrapShellCommand(command).split(/[\n;|&]/)) {
+    const tokens = tokenize(segment);
+    const cd = parseCdTarget(tokens, cwd, env);
+    if (cd) {
+      cwd = cd.path;
+      continue;
+    }
+    visit(tokens, cwd);
+    collectSegmentAssignments(tokens, env);
+  }
+};
+
+/**
+ * Subcommands that act ON a checkout, and so say where the work is happening.
+ * Read-only ones (`status`, `log`, `diff`, `rev-parse`, `fetch`) are deliberately
+ * out: reading another directory is not moving into it, and the agent reads across
+ * repos constantly.
+ */
+const GIT_CHECKOUT_MUTATING_SUBCOMMANDS = new Set([
+  'add',
+  'am',
+  'apply',
+  'checkout',
+  'cherry-pick',
+  'commit',
+  'merge',
+  'pull',
+  'push',
+  'rebase',
+  'reset',
+  'restore',
+  'revert',
+  'rm',
+  'stash',
+  'switch',
+  'worktree',
+]);
+
+const isGhPrCreateTokens = (tokens: string[]): boolean => {
+  let i = consumeCommandPreamble(tokens);
+  if (!isGhExecutable(tokens[i] ?? '')) return false;
+  i += 1;
+
+  while (i < tokens.length && tokens[i].startsWith('-')) {
+    if (GH_GLOBAL_VALUE_FLAGS.has(stripQuotes(tokens[i]))) i += 2;
+    else i += 1;
+  }
+
+  return stripQuotes(tokens[i] ?? '') === 'pr' && stripQuotes(tokens[i + 1] ?? '') === 'create';
+};
+
+/**
+ * The directory the command's LAST checkout-mutating git / `gh pr create`
+ * invocation ran in — `git -C <dir>` included. Last wins: a command that works in
+ * a worktree and then commits back in the source repo ends up in the source repo.
+ *
+ * `undefined` means "no signal": the command changed no checkout, or a `cd` left
+ * the cwd unresolvable. Callers must leave the topic's recorded checkout alone.
+ */
+export const resolveGitCommandCwd = (
+  command: string | string[],
+  source: string,
+): string | undefined => {
+  let result: string | undefined;
+
+  walkCommandSegments(command, source, (tokens, cwd) => {
+    const git = parseGitSubcommand(tokens, cwd);
+    if (git) {
+      if (GIT_CHECKOUT_MUTATING_SUBCOMMANDS.has(git.subcommand)) result = git.baseCwd;
+      return;
+    }
+    if (isGhPrCreateTokens(tokens)) result = cwd;
+  });
+
+  return result;
+};
+
+/**
+ * macOS resolves `/tmp` and `/var` through a firmlink, so git reports
+ * `/private/tmp/wt` for a directory the agent wrote as `/tmp/wt`. Fold the two
+ * spellings together — otherwise a legitimate worktree reads as another repo.
+ */
+const normalizeComparePath = (p: string): string =>
+  p.replace(/^\/private(?=\/(?:tmp|var)\/)/, '').replace(/\/+$/, '');
+
+/** Is `child` that directory or inside it? (`cd src && git commit` is still the repo.) */
+const isWithinPath = (child: string, base: string): boolean => {
+  const target = normalizeComparePath(child);
+  const root = normalizeComparePath(base);
+  return target === root || target.startsWith(`${root}/`);
+};
+
+/**
+ * The topic's bound device (written at dispatch) or, unbound, this machine.
+ * Mirrors WorkingDirectorySection: the local device answers over IPC (deviceId
+ * omitted), a remote one over RPC.
+ */
+const resolveGitDeviceId = (boundDeviceId?: string): string | undefined => {
+  const currentDeviceId = getElectronStoreState().gatewayDeviceInfo?.deviceId;
+  const targetDeviceId = boundDeviceId ?? currentDeviceId;
+  const isLocalDevice = isDesktop && !!targetDeviceId && targetDeviceId === currentDeviceId;
+  return isLocalDevice ? undefined : targetDeviceId;
+};
+
+const listSourceWorktrees = async (source: string, boundDeviceId?: string) => {
+  try {
+    const worktrees = await gitService.listGitWorktrees({
+      deviceId: resolveGitDeviceId(boundDeviceId),
+      path: source,
+    });
+    return worktrees ?? [];
+  } catch {
+    return [];
+  }
+};
+
+/** Which checkout of THIS topic a command ran in — or another repository entirely. */
+type CommandRepoScope = 'foreign' | 'source' | { worktree: string };
+
+/**
+ * Place a command's cwd relative to the topic's repo. The source repo and its
+ * linked worktrees are the topic; anything else is another repository the agent
+ * merely stepped into, whose branch / PR / worktree describe a different project.
+ *
+ * `undefined` = cannot tell (offline device, unreadable source) — callers fail
+ * closed, because recording a foreign checkout is exactly what strands a topic on
+ * a directory it has no way back from.
+ */
+const classifyCommandRepo = async (
+  cwd: string,
+  source: string,
+  currentConfig: WorkingDirConfig | undefined,
+  boundDeviceId?: string,
+): Promise<CommandRepoScope | undefined> => {
+  if (isWithinPath(cwd, source)) return 'source';
+
+  // The worktree the topic already sits in needs no probe — command after command
+  // inside it is the common case.
+  const active = currentConfig?.git?.activeWorktree;
+  if (active && isWithinPath(cwd, active)) return { worktree: active };
+
+  const worktrees = await listSourceWorktrees(source, boundDeviceId);
+  if (worktrees.length === 0) return undefined;
+
+  // Longest match wins so a worktree nested under another resolves to itself.
+  const match = worktrees
+    .filter((worktree) => isWithinPath(cwd, worktree.path))
+    .sort((a, b) => b.path.length - a.path.length)[0];
+
+  return match ? { worktree: match.path } : 'foreign';
+};
+
+/**
  * Ground truth for a worktree-add whose path token never survives static parsing
  * (`git worktree add "$WT" …`, `$(mktemp -d)`, `~/wt`): ask the run's target
  * device which worktree actually holds the branch the command referenced. Fails
@@ -929,24 +1130,10 @@ const resolveWorktreeAddFromDevice = async (
   const branchHint = normalizeBranch(parsed.branch ?? parsed.ref);
   if (!branchHint) return undefined;
 
-  // The topic's bound device (written at dispatch) or, unbound, this machine.
-  // Mirrors WorkingDirectorySection: the local device answers over IPC
-  // (deviceId omitted), a remote one over RPC.
-  const currentDeviceId = getElectronStoreState().gatewayDeviceInfo?.deviceId;
-  const targetDeviceId = boundDeviceId ?? currentDeviceId;
-  const isLocalDevice = isDesktop && !!targetDeviceId && targetDeviceId === currentDeviceId;
-
-  try {
-    const worktrees = await gitService.listGitWorktrees({
-      deviceId: isLocalDevice ? undefined : targetDeviceId,
-      path: source,
-    });
-    const match = worktrees.find((worktree) => worktree.branch === branchHint);
-    if (!match) return undefined;
-    return { ...(match.branch ? { branch: match.branch } : {}), path: match.path };
-  } catch {
-    return undefined;
-  }
+  const worktrees = await listSourceWorktrees(source, boundDeviceId);
+  const match = worktrees.find((worktree) => worktree.branch === branchHint);
+  if (!match) return undefined;
+  return { ...(match.branch ? { branch: match.branch } : {}), path: match.path };
 };
 
 /**
@@ -1004,6 +1191,11 @@ export const recordWorktreeAdd = async (params: {
  * - `git switch` / confirmed `git checkout` updates the branch snapshot.
  * - `git push` records the remote ref the branch publishes to.
  * - `gh pr create` binds the created PR URL to the topic.
+ *
+ * All of them are scoped by the directory the command ran in (`resolveGitCommandCwd`):
+ * the active worktree FOLLOWS that directory — set when the work moves into a linked
+ * worktree, cleared when it moves back to the source repo — and a command that ran in
+ * another repository is dropped whole.
  */
 export const recordGitCommandEffects = async (params: {
   command: string | string[];
@@ -1019,6 +1211,40 @@ export const recordGitCommandEffects = async (params: {
   if (!source) return;
 
   let nextConfig = currentConfig;
+
+  // Where the command RAN decides whether it describes this topic at all, and which
+  // checkout it describes. This is the only signal available: the CLI's session cwd
+  // is restored after every tool call, so it names the source repo whether the work
+  // happened there or three directories away.
+  const commandCwd = resolveGitCommandCwd(command, source);
+  const scope = commandCwd
+    ? await classifyCommandRepo(commandCwd, source, currentConfig, topic?.metadata?.boundDeviceId)
+    : undefined;
+
+  // Work done in ANOTHER repository never describes this topic. Recording its
+  // worktree / branch / PR against a source they don't belong to is what strands the
+  // topic on a checkout with no way back — the source repo's worktree list, which is
+  // the UI's only switch-back affordance, can never offer a foreign directory.
+  // An unclassifiable cwd is treated the same way: fail closed.
+  if (commandCwd && (!scope || scope === 'foreign')) return;
+
+  if (scope === 'source') {
+    // Back in the source repo. Symmetric with `ExitWorktree`, and the only exit a
+    // shell-driven agent has: it enters a worktree by `cd`, never by a tool call.
+    const currentGit = currentConfig?.git;
+    if (currentGit?.activeWorktree || currentGit?.isWorktree) {
+      nextConfig = applyWorktreeExitToConfig(nextConfig, source);
+    }
+  } else if (
+    scope &&
+    scope !== 'foreign' &&
+    scope.worktree !== currentConfig?.git?.activeWorktree
+  ) {
+    // Working inside a linked worktree the topic hasn't recorded yet — the agent
+    // `cd`s into worktrees it created in an earlier turn, or before this topic
+    // started tracking one.
+    nextConfig = applyWorktreeAddToConfig(nextConfig, source, { path: scope.worktree });
+  }
 
   const worktreeInfo = await resolveWorktreeAddInfo(
     parseWorktreeAddInfo(command, source),

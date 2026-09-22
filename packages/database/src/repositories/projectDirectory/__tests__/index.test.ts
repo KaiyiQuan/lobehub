@@ -168,6 +168,30 @@ describe('ProjectDirectoryRepository.bind', () => {
     expect(after.configurationSnapshot).toEqual(before.configurationSnapshot);
   });
 
+  it('rejects filing conversations for an agent fixed to another execution target', async () => {
+    await db
+      .update(agents)
+      .set({
+        agencyConfig: {
+          boundDeviceId: 'other-device',
+          executionTarget: 'device',
+          executionTargetSelectionPolicy: 'fixed',
+        },
+      })
+      .where(eq(agents.id, 'repo-agent'));
+    await db.insert(topics).values({
+      id: 'fixed-agent-topic',
+      agentId: 'repo-agent',
+      userId,
+      metadata: { workingDirectory: base.path },
+    });
+    await expect(
+      repo.bind({ ...base, agentId: 'repo-agent', topicIds: ['fixed-agent-topic'] }),
+    ).rejects.toThrow('execution target');
+    const [topic] = await db.select().from(topics).where(eq(topics.id, 'fixed-agent-topic'));
+    expect(topic.projectId).toBeNull();
+  });
+
   it('files explicit conversations and rolls back mismatched selections', async () => {
     await db.insert(topics).values([
       {

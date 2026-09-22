@@ -1,7 +1,8 @@
 import nodePath from 'node:path';
 
+import type { EnvironmentConfiguration } from '@lobechat/types';
 import { getWorkingDirSourcePath } from '@lobechat/types';
-import { and, asc, eq, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 
 import {
   agents,
@@ -96,13 +97,20 @@ export class ProjectWorkingDirectoryModel {
         projectName: projects.name,
         projectAvatar: projects.avatar,
         projectSlug: projects.slug,
-        instanceId: environmentInstances.id,
+        // The instance join keys on the global natural key (device, path), so a
+        // row can meet an instance another project linked first. Project the
+        // instance and its configuration snapshot only when the environment is
+        // linked to THIS project — otherwise the row stays a legacy directory
+        // with null environment fields, discoverable for upgrade.
+        instanceId: sql<
+          string | null
+        >`case when ${environments.id} is not null then ${environmentInstances.id} else null end`,
         environmentId: environments.id,
         environmentName: environments.name,
         // The materialized instance's snapshot, not the live environment
         // definition — the snapshot is never implicitly refreshed, so it is
         // the configuration the instance actually represents.
-        configuration: environmentInstances.configurationSnapshot,
+        configuration: sql<EnvironmentConfiguration | null>`case when ${environments.id} is not null then ${environmentInstances.configurationSnapshot} else null end`,
         deviceId: devices.deviceId,
         deviceName: devices.friendlyName,
         platform: devices.platform,
@@ -118,12 +126,18 @@ export class ProjectWorkingDirectoryModel {
           eq(environmentInstances.workingDirectory, projectWorkingDirectories.path),
         ),
       )
-      .leftJoin(environments, eq(environments.id, environmentInstances.environmentId))
       .leftJoin(
         projectEnvironments,
         and(
+          eq(projectEnvironments.environmentId, environmentInstances.environmentId),
           eq(projectEnvironments.projectId, projects.id),
-          eq(projectEnvironments.environmentId, environments.id),
+        ),
+      )
+      .leftJoin(
+        environments,
+        and(
+          eq(environments.id, projectEnvironments.environmentId),
+          buildWorkspaceWhere(this.scope(), environments),
         ),
       )
       .innerJoin(devices, eq(devices.id, projectWorkingDirectories.deviceId))
@@ -131,13 +145,6 @@ export class ProjectWorkingDirectoryModel {
         and(
           buildWorkspaceWhere(this.scope(), projects),
           isNull(projects.deletedAt),
-          or(
-            isNull(environmentInstances.id),
-            and(
-              buildWorkspaceWhere(this.scope(), environments),
-              eq(projectEnvironments.projectId, projects.id),
-            ),
-          ),
           buildWorkspaceWhere(this.scope(), devices),
           projectId ? eq(projects.id, projectId) : undefined,
         ),
@@ -206,7 +213,10 @@ export class ProjectWorkingDirectoryModel {
       .from(topics)
       .where(and(eq(topics.id, topicId), buildWorkspaceWhere(this.scope(), topics)));
     if (!topic?.projectWorkingDirectoryId) {
-      if (topic?.metadata?.boundDeviceId)
+      // The binding row is gone (directory deletion sets the FK null) but the
+      // topic still carries its project pin. Plain device-bound topics have no
+      // projectId and simply follow the normal device-resolution path.
+      if (topic?.projectId && topic?.metadata?.boundDeviceId)
         throw new Error('Project directory binding no longer exists');
       return;
     }

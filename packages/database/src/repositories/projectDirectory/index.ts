@@ -125,6 +125,16 @@ export class ProjectDirectoryRepository {
         }));
       if (input.topicIds?.length) {
         if (!input.agentId) throw new Error('Agent is required when filing conversations');
+        const [filingAgent] = await db
+          .select()
+          .from(agents)
+          .where(and(eq(agents.id, input.agentId), buildWorkspaceWhere(this.scope(), agents)));
+        if (
+          !filingAgent ||
+          (filingAgent.agencyConfig?.executionTargetSelectionPolicy === 'fixed' &&
+            filingAgent.agencyConfig.boundDeviceId !== device.deviceId)
+        )
+          throw new Error('Agent cannot use this execution target');
         const selected = await db
           .select()
           .from(topics)

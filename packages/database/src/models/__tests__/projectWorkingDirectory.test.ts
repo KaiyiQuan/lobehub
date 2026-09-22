@@ -125,6 +125,45 @@ describe('project directory queries', () => {
     ]);
   });
 
+  it('keeps a colliding legacy directory visible when another project upgrades first', async () => {
+    await db.insert(agents).values({ id: 'directory-coordinator-2', userId });
+    await db.insert(projects).values({
+      coordinatorAgentId: 'directory-coordinator-2',
+      id: 'second-project',
+      identifier: 'SEC',
+      name: 'Second project',
+      userId,
+    });
+    const [device] = await db.select().from(devices);
+    await db.insert(projectWorkingDirectories).values([
+      {
+        addedByUserId: userId,
+        deviceId: device.id,
+        name: 'First',
+        path: base.path,
+        projectId: base.projectId,
+      },
+      {
+        addedByUserId: userId,
+        deviceId: device.id,
+        name: 'Second',
+        path: base.path,
+        projectId: 'second-project',
+      },
+    ]);
+    await repo.bind(base);
+    const rows = await model.list();
+    expect(rows).toHaveLength(2);
+    const legacy = rows.find((row) => row.projectId === 'second-project')!;
+    expect(legacy).toMatchObject({
+      configuration: null,
+      environmentId: null,
+      instanceId: null,
+      path: base.path,
+    });
+    await expect(model.resolve(legacy.id)).rejects.toThrow('Link this directory');
+  });
+
   it('returns the project icon and leading agent metadata with directory topics', async () => {
     await db.update(projects).set({ avatar: '📦' }).where(eq(projects.id, base.projectId));
     await db
@@ -183,6 +222,15 @@ describe('resolveForTopic', () => {
     const topic = await new TopicModel(db, userId).create({
       agentId: 'directory-agent',
       title: 'Plain',
+    });
+    expect(await model.resolveForTopic(topic.id)).toBeUndefined();
+  });
+
+  it('leaves plain device-bound conversations to the device-resolution path', async () => {
+    const topic = await new TopicModel(db, userId).create({
+      agentId: 'directory-agent',
+      metadata: { boundDeviceId: base.deviceId, workingDirectory: base.path },
+      title: 'Device chat',
     });
     expect(await model.resolveForTopic(topic.id)).toBeUndefined();
   });

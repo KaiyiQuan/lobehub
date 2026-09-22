@@ -84,6 +84,16 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
     flex: 1;
     min-width: 0;
   `,
+  truncated: css`
+    flex-shrink: 0;
+
+    padding-block: 4px;
+    padding-inline: 12px;
+    border-block-start: 1px solid ${cssVar.colorBorderSecondary};
+
+    font-size: 11px;
+    color: ${cssVar.colorTextTertiary};
+  `,
 }));
 
 const stripTrailingSlash = (value: string) => (value.endsWith('/') ? value.slice(0, -1) : value);
@@ -252,7 +262,7 @@ const Files = memo<FilesProps>(({ deviceId, workingDirectory }) => {
   );
   // The index delivers fully git-ignored folders as childless collapsed rows;
   // their children stream in here as the user expands them.
-  const collapsedChildren = useCollapsedDirectoryChildren({
+  const { children: collapsedChildren, truncatedCount } = useCollapsedDirectoryChildren({
     deviceId,
     entries,
     expandedIds,
@@ -648,6 +658,9 @@ const Files = memo<FilesProps>(({ deviceId, workingDirectory }) => {
             onNodeDragStart={handleNodeDragStart}
           />
         </div>
+      )}
+      {truncatedCount > 0 && (
+        <div className={styles.truncated}>{t('workingPanel.files.truncatedNotice')}</div>
       )}
     </Flexbox>
   );

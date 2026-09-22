@@ -2465,6 +2465,7 @@
   "workingPanel.files.showInReview": "在审查中查看",
   "workingPanel.files.showInSystem": "在文件夹中显示",
   "workingPanel.files.title": "文件",
+  "workingPanel.files.truncatedNotice": "部分展开的文件夹内容过多，仅显示前部分条目",
   "workingPanel.files.views.changes": "Git 变更",
   "workingPanel.files.views.project": "项目",
   "workingPanel.files.views.title": "文件视图",

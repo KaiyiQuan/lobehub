@@ -2916,6 +2916,8 @@ export default {
   'workingPanel.files.showInReview': 'Show in Review',
   'workingPanel.files.showInSystem': 'Reveal in Folder',
   'workingPanel.files.title': 'Files',
+  'workingPanel.files.truncatedNotice':
+    'Some expanded folders are too large to list fully — only the first entries are shown',
   'workingPanel.files.views.changes': 'Git Changes',
   'workingPanel.files.views.project': 'Project',
   'workingPanel.files.views.title': 'File View',

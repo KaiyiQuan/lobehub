@@ -827,4 +827,46 @@ describe('Files — collapsed ignored directories', () => {
       expect(listProjectDirectoryMock).toHaveBeenCalledTimes(1);
     });
   });
+
+  it('retries the listing on re-expand when the file host answered nothing (offline)', async () => {
+    projectFilesMock.data.entries.push(collapsedDirEntry);
+    listProjectDirectoryMock.mockResolvedValue(undefined);
+    render(<Files workingDirectory="/repo" />);
+
+    expandNodes(['\0project-root', '.agent-tracing/']);
+    await waitFor(() => {
+      expect(listProjectDirectoryMock).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      (explorerTreeProps.current?.nodes as { id: string }[]).some(
+        (node) => node.id.startsWith('.agent-tracing/') && node.id !== '.agent-tracing/',
+      ),
+    ).toBe(false);
+
+    // Collapse and re-expand after the device comes back: must retry.
+    listProjectDirectoryMock.mockResolvedValue({ entries: collapsedChildren, truncated: false });
+    expandNodes(['\0project-root']);
+    expandNodes(['\0project-root', '.agent-tracing/']);
+
+    await waitFor(() => {
+      expect(listProjectDirectoryMock).toHaveBeenCalledTimes(2);
+      expect(
+        (explorerTreeProps.current?.nodes as { id: string }[]).some(
+          (node) => node.id === '.agent-tracing/trace.jsonl',
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it('surfaces a truncation notice when the host caps the directory listing', async () => {
+    projectFilesMock.data.entries.push(collapsedDirEntry);
+    listProjectDirectoryMock.mockResolvedValue({ entries: collapsedChildren, truncated: true });
+    render(<Files workingDirectory="/repo" />);
+
+    expandNodes(['\0project-root', '.agent-tracing/']);
+
+    await waitFor(() => {
+      expect(screen.getByText('workingPanel.files.truncatedNotice')).toBeInTheDocument();
+    });
+  });
 });

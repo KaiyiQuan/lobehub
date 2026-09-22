@@ -13,6 +13,12 @@ interface UseCollapsedDirectoryChildrenParams {
   projectRoot: string;
 }
 
+interface CollapsedDirectoryChildren {
+  children: ProjectFileIndexEntry[];
+  /** Expanded directories whose on-disk listing exceeded the host-side cap. */
+  truncatedCount: number;
+}
+
 /**
  * Children of collapsed (fully git-ignored) directories, fetched one level at a
  * time as the user expands them. The project index deliberately omits these
@@ -27,12 +33,13 @@ export const useCollapsedDirectoryChildren = ({
   entries,
   expandedIds,
   projectRoot,
-}: UseCollapsedDirectoryChildrenParams): ProjectFileIndexEntry[] => {
+}: UseCollapsedDirectoryChildrenParams): CollapsedDirectoryChildren => {
   const scopeKey = `${deviceId ?? ''}\0${projectRoot}`;
-  const [loaded, setLoaded] = useState<{ entries: ProjectFileIndexEntry[]; scopeKey: string }>({
-    entries: [],
-    scopeKey,
-  });
+  const [loaded, setLoaded] = useState<{
+    entries: ProjectFileIndexEntry[];
+    scopeKey: string;
+    truncatedDirs: string[];
+  }>({ entries: [], scopeKey, truncatedDirs: [] });
   // relativePath → scope it was requested for; dedupes fetches and drops stale resolves.
   const requested = useSingleton(() => new Map<string, string>());
 
@@ -41,6 +48,7 @@ export const useCollapsedDirectoryChildren = ({
   }, [scopeKey]);
 
   const children = loaded.scopeKey === scopeKey ? loaded.entries : [];
+  const truncatedCount = loaded.scopeKey === scopeKey ? loaded.truncatedDirs.length : 0;
 
   useEffect(() => {
     const knownEntries = new Map(
@@ -57,9 +65,16 @@ export const useCollapsedDirectoryChildren = ({
         projectFileService.listProjectDirectory({ deviceId, relativePath: id, root: projectRoot }),
       )
         .then((result) => {
-          if (!result || requested.get(id) !== scopeKey) return;
+          if (requested.get(id) !== scopeKey) return;
+          if (!result) {
+            // The file host answered nothing (e.g. remote device offline). Drop
+            // the marker so collapsing and re-expanding retries after reconnect.
+            requested.delete(id);
+            return;
+          }
           setLoaded((previous) => {
             const base = previous.scopeKey === scopeKey ? previous.entries : [];
+            const baseTruncated = previous.scopeKey === scopeKey ? previous.truncatedDirs : [];
             const freshPaths = new Set(result.entries.map((child) => child.relativePath));
             return {
               entries: [
@@ -67,6 +82,10 @@ export const useCollapsedDirectoryChildren = ({
                 ...result.entries,
               ],
               scopeKey,
+              truncatedDirs:
+                result.truncated && !baseTruncated.includes(id)
+                  ? [...baseTruncated, id]
+                  : baseTruncated,
             };
           });
         })
@@ -78,5 +97,5 @@ export const useCollapsedDirectoryChildren = ({
     }
   }, [children, deviceId, entries, expandedIds, projectRoot, scopeKey]);
 
-  return children;
+  return { children, truncatedCount };
 };

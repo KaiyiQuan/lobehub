@@ -39,6 +39,7 @@ import { useGlobalStore } from '@/store/global';
 
 import { filterProjectFileEntries, mergeMissingDeletedEntries } from './fileFilter';
 import { isExcludedProjectFileEntry } from './fileVisibility';
+import { useCollapsedDirectoryChildren } from './useCollapsedDirectoryChildren';
 import { buildGitStatusEntries, useGitWorkingTreeFiles } from './useGitWorkingTreeFiles';
 import { useProjectFiles } from './useProjectFiles';
 
@@ -238,6 +239,7 @@ const Files = memo<FilesProps>(({ deviceId, workingDirectory }) => {
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [searchEntries, setSearchEntries] = useState<ProjectFileIndexEntry[] | undefined>();
   const [isSearching, setIsSearching] = useState(false);
+  const [expandedIds, setExpandedIds] = useState<string[]>([]);
   const projectRootName = getProjectRootName(projectRoot);
   const normalizedDebouncedQuery = debouncedQuery.trim();
   const isFiltering = normalizedDebouncedQuery.length > 0;
@@ -248,8 +250,16 @@ const Files = memo<FilesProps>(({ deviceId, workingDirectory }) => {
     () => new Set(workingTreeGitStatus.map((entry) => entry.path)),
     [workingTreeGitStatus],
   );
+  // The index delivers fully git-ignored folders as childless collapsed rows;
+  // their children stream in here as the user expands them.
+  const collapsedChildren = useCollapsedDirectoryChildren({
+    deviceId,
+    entries,
+    expandedIds,
+    projectRoot,
+  });
   const displayEntries = useMemo(() => {
-    const indexedEntries = isFiltering ? (searchEntries ?? []) : entries;
+    const indexedEntries = isFiltering ? (searchEntries ?? []) : [...entries, ...collapsedChildren];
     const entriesWithDeleted = mergeMissingDeletedEntries(
       indexedEntries,
       isFiltering ? [] : (gitFiles?.deleted ?? []),
@@ -263,6 +273,7 @@ const Files = memo<FilesProps>(({ deviceId, workingDirectory }) => {
     });
   }, [
     changedOnly,
+    collapsedChildren,
     dirtyFilePaths,
     entries,
     gitFiles?.deleted,
@@ -299,8 +310,6 @@ const Files = memo<FilesProps>(({ deviceId, workingDirectory }) => {
     () => getExplorerTreeStyleVars({ reserveChevronSlot: nodes.some((node) => node.isFolder) }),
     [nodes],
   );
-
-  const [expandedIds, setExpandedIds] = useState<string[]>([]);
 
   useEffect(() => {
     setViewMode('project');

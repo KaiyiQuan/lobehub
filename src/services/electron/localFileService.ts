@@ -33,6 +33,8 @@ import {
   type OpenLocalFolderParams,
   type PrepareSkillDirectoryParams,
   type PrepareSkillDirectoryResult,
+  type ProjectDirectoryListParams,
+  type ProjectDirectoryListResult,
   type ProjectFileIndexParams,
   type ProjectFileIndexResult,
   type ProjectFileSearchParams,
@@ -219,6 +221,12 @@ class LocalFileService {
 
   async searchProjectFiles(params: ProjectFileSearchParams): Promise<ProjectFileSearchResult> {
     return ensureElectronIpc().localSystem.searchProjectFiles(params);
+  }
+
+  async listProjectDirectory(
+    params: ProjectDirectoryListParams,
+  ): Promise<ProjectDirectoryListResult> {
+    return ensureElectronIpc().localSystem.listProjectDirectory(params);
   }
 
   async listProjectSkills(params: ListProjectSkillsParams): Promise<ListProjectSkillsResult> {

@@ -3,6 +3,7 @@ import type {
   LocalFilePreviewUrlParams,
   LocalMoveFilesResultItem,
   MoveLocalFileParams,
+  ProjectDirectoryListResult,
   ProjectFileIndexResult,
   ProjectFileSearchResult,
   RenameLocalFileResult,
@@ -97,6 +98,25 @@ class ProjectFileService {
           scope,
         })) ?? undefined)
       : localFileService.searchProjectFiles({ changedOnly, excludeIgnored, limit, query, scope });
+  }
+
+  /**
+   * Children of one directory the index collapsed (a fully git-ignored folder),
+   * read on demand when the user expands that row in the tree.
+   */
+  async listProjectDirectory({
+    deviceId,
+    relativePath,
+    root,
+  }: {
+    deviceId?: string;
+    relativePath: string;
+    root: string;
+  }): Promise<ProjectDirectoryListResult | undefined> {
+    return deviceId
+      ? ((await lambdaClient.device.listProjectDirectory.query({ deviceId, relativePath, root })) ??
+          undefined)
+      : localFileService.listProjectDirectory({ relativePath, root });
   }
 
   /** File preview payload for a file in a project working directory. */

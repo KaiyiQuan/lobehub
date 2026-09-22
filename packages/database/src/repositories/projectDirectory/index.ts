@@ -203,7 +203,7 @@ export class ProjectDirectoryRepository {
       const pinned = topic.metadata?.boundDeviceId;
       if (
         directory &&
-        ((source && source.replace(/[\\/]+$/, '') !== directory.path.replace(/[\\/]+$/, '')) ||
+        ((source && normalizeProjectDirectory(source, directory.platform) !== directory.path) ||
           (pinned && pinned !== directory.deviceId))
       )
         throw new Error('Keep the existing device and working directory');

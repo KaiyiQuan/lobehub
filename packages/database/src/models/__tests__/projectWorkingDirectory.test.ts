@@ -174,6 +174,18 @@ describe('resolveForTopic', () => {
     });
     expect(await model.resolveForTopic(topic.id)).toBeUndefined();
   });
+
+  it('resolves legacy topics whose metadata path is not canonical', async () => {
+    const directory = await repo.bind(base);
+    const topic = await new TopicModel(db, userId).create({
+      agentId: 'directory-agent',
+      metadata: { workingDirectory: '/work/./repo' },
+      projectId: base.projectId,
+      projectWorkingDirectoryId: directory.id,
+      title: 'Legacy',
+    });
+    expect(await model.resolveForTopic(topic.id)).toMatchObject({ id: directory.id });
+  });
 });
 
 describe('topic projections', () => {

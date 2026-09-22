@@ -102,6 +102,7 @@ export class ProjectWorkingDirectoryModel {
         configuration: environments.configuration,
         deviceId: devices.deviceId,
         deviceName: devices.friendlyName,
+        platform: devices.platform,
         path: sql<string>`coalesce(${environmentInstances.workingDirectory}, ${projectWorkingDirectories.path})`,
         permission: projectWorkingDirectories.permission,
       })
@@ -209,7 +210,10 @@ export class ProjectWorkingDirectoryModel {
     const source = getWorkingDirSourcePath(
       topic.metadata?.workingDirectoryConfig ?? topic.metadata?.workingDirectory,
     );
-    if (source?.replace(/[\\/]+$/, '') !== directory.path.replace(/[\\/]+$/, ''))
+    // Compare with the same platform-aware normalization used when binding —
+    // legacy metadata may carry non-canonical segments (`./`, `..`, duplicate
+    // separators) that a plain trailing-separator trim would reject forever.
+    if (source && normalizeProjectDirectory(source, directory.platform) !== directory.path)
       throw new Error('Conversation directory differs from its project binding');
     return directory;
   }

@@ -236,4 +236,21 @@ describe('ProjectDirectoryRepository.associateTopic', () => {
       },
     });
   });
+
+  it('accepts a non-canonical but equivalent topic path when associating', async () => {
+    const directory = await repo.bind(base);
+    await db.insert(topics).values({
+      id: 'legacy-path',
+      agentId: 'repo-agent',
+      userId,
+      metadata: { workingDirectory: '/work//repo/' },
+    });
+    await repo.associateTopic(base.projectId, 'legacy-path', directory.id);
+    const [topic] = await db.select().from(topics).where(eq(topics.id, 'legacy-path'));
+    expect(topic.metadata).toMatchObject({
+      boundDeviceId: base.deviceId,
+      workingDirectory: base.path,
+      workingDirectoryConfig: { path: base.path },
+    });
+  });
 });

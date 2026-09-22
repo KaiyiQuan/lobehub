@@ -435,6 +435,7 @@ const DocumentBody = memo(() => {
         <FooterActions
           agentId={activeAgentId}
           documentId={documentId}
+          fileBacked={renderMode.mode === 'file'}
           title={documentMeta?.title ?? documentMeta?.filename ?? undefined}
         />
       )}

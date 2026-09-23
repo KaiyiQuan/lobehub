@@ -1,4 +1,5 @@
 import { CUSTOM_FOLDER_FILE_TYPE } from '@lobechat/const';
+import { FileSource } from '@lobechat/types';
 import { renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -81,8 +82,9 @@ describe('useDocumentTreeOps.uploadFiles', () => {
     expect(dispatchDockFileListMock).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'addFiles' }),
     );
+    /** @example The upload carries the source used for shared visibility and library exclusion. */
     expect(uploadWithProgressMock).toHaveBeenCalledWith(
-      expect.objectContaining({ skipCheckFileType: true }),
+      expect.objectContaining({ skipCheckFileType: true, source: FileSource.AgentDocument }),
     );
     expect(importFileMock).toHaveBeenCalledWith({
       agentId: 'agent-1',

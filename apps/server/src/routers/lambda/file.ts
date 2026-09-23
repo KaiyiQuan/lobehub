@@ -269,10 +269,15 @@ export const fileRouter = router({
       //   2. Otherwise an explicit caller value wins.
       //   3. Otherwise inherit the parent document's visibility so a file
       //      uploaded inside a private folder stays private.
-      //   4. Otherwise default top-level uploads to 'private' so new content
+      //   4. Agent-document uploads default to 'public' to match their document's
+      //      access contract; their source keeps them out of resource listings.
+      //   5. Otherwise default top-level uploads to 'private' so new content
       //      starts in the creator's private space (mirrors the Pages spec).
       const resolvedVisibility: 'private' | 'public' | undefined = ctx.workspaceId
-        ? (knowledgeBaseVisibility ?? input.visibility ?? parentVisibility ?? 'private')
+        ? (knowledgeBaseVisibility ??
+          input.visibility ??
+          parentVisibility ??
+          (input.source === FileSource.AgentDocument ? 'public' : 'private'))
         : undefined;
 
       if (latestUpload?.status === 'settled') {

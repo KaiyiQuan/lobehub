@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { getTestDB } from '../../core/getTestDB';
+import { KnowledgeRepo } from '../../repositories/knowledge';
 import { agentDocuments, agents, documents, users, workspaces } from '../../schemas';
 import type { LobeChatDatabase } from '../../type';
 import { AgentDocumentModel } from '../agentDocuments';
@@ -32,6 +33,27 @@ afterEach(async () => {
 });
 
 describe('AgentDocumentModel workspace scope', () => {
+  /** @example A new agent document is public in its workspace but absent from Resources. */
+  it('creates public agent documents without adding them to the resource library', async () => {
+    const memberId = 'agent-document-other-member';
+    await serverDB.insert(users).values({ id: memberId });
+    const model = new AgentDocumentModel(serverDB, userId, workspaceId);
+    const document = await model.create('workspace-agent-document-agent', 'shared.md', '# Shared');
+    const [stored] = await serverDB
+      .select({ visibility: documents.visibility })
+      .from(documents)
+      .where(eq(documents.id, document.documentId));
+
+    /** @example The default is explicitly public, so members share the same agent resource. */
+    expect(stored?.visibility).toBe('public');
+    /** @example Another workspace member can read the bound agent document. */
+    expect(
+      await new AgentDocumentModel(serverDB, memberId, workspaceId).findById(document.id),
+    ).toMatchObject({ content: '# Shared' });
+    /** @example The agent source is excluded from ordinary resource browsing. */
+    expect(await new KnowledgeRepo(serverDB, memberId, workspaceId).query()).toEqual([]);
+  });
+
   it('isolates document reads and deletes between personal and workspace scopes', async () => {
     const personalModel = new AgentDocumentModel(serverDB, userId);
     const workspaceModel = new AgentDocumentModel(serverDB, userId, workspaceId);

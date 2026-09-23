@@ -1,3 +1,4 @@
+import { FileSource } from '@lobechat/types';
 import { confirmModal, toast } from '@lobehub/ui/base-ui';
 import { nanoid } from 'nanoid';
 import { useCallback, useMemo, useRef } from 'react';
@@ -271,6 +272,7 @@ export const useDocumentTreeOps = ({
             file,
             onStatusUpdate: dispatchDockFileList,
             skipCheckFileType: true,
+            source: FileSource.AgentDocument,
             uploadId,
           });
 

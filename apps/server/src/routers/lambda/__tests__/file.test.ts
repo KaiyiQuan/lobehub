@@ -559,6 +559,43 @@ describe('fileRouter', () => {
       );
     });
 
+    /** @example Agent-document uploads are readable by other members of the workspace. */
+    it('defaults agent-document uploads to public without changing ordinary upload defaults', async () => {
+      // ROOT CAUSE:
+      // Agent uploads used the ordinary private-file default while their document rows
+      // were public. Other workspace members saw the document but its preview returned 404.
+      // Default the dedicated upload source to public and retain private ordinary uploads.
+      ({ caller } = createCallerWithCtx({ workspaceId: 'workspace-1' }));
+      mockFileModelCheckHash.mockResolvedValue({ isExist: false });
+      mockFileModelCreate.mockResolvedValue({ id: 'new-file-id' });
+      const upload = {
+        fileType: 'application/pdf',
+        hash: 'agent-upload-hash',
+        metadata: {},
+        name: 'brief.pdf',
+        size: 100,
+        url: 'files/brief.pdf',
+      };
+
+      await caller.createFile({ ...upload, source: FileSource.AgentDocument });
+
+      /** @example The persisted original file has the same public visibility as its document. */
+      expect(mockFileModelCreate).toHaveBeenLastCalledWith(
+        expect.objectContaining({ source: FileSource.AgentDocument, visibility: 'public' }),
+        true,
+        routerMocks.transactionClient,
+      );
+
+      await caller.createFile(upload);
+
+      /** @example An ordinary upload still starts private. */
+      expect(mockFileModelCreate).toHaveBeenLastCalledWith(
+        expect.objectContaining({ source: undefined, visibility: 'private' }),
+        true,
+        routerMocks.transactionClient,
+      );
+    });
+
     it('should drop an unrecognised source instead of failing the upload', async () => {
       mockFileModelCheckHash.mockResolvedValue({ isExist: false });
       mockFileModelCreate.mockResolvedValue({ id: 'new-file-id' });

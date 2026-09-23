@@ -465,6 +465,24 @@ export class AgentModel {
     return (rows[0]?.visibility as 'private' | 'public' | undefined) ?? null;
   };
 
+  /**
+   * Returns the agent's current system prompt, scoped by the model's ownership
+   * filter, or `null` when the agent is missing or not visible to the caller.
+   *
+   * A narrow read on purpose: the Agent Builder / Agent Management `updatePrompt`
+   * runtimes need the pre-update value to report a diff, and `getAgentConfigById`
+   * would pull the whole row plus its knowledge-base join just to read one column.
+   */
+  getAgentSystemRole = async (id: string): Promise<string | null> => {
+    const rows = await this.db
+      .select({ systemRole: agents.systemRole })
+      .from(agents)
+      .where(and(eq(agents.id, id), this.ownership()))
+      .limit(1);
+
+    return rows[0]?.systemRole ?? null;
+  };
+
   existsById = async (id: string): Promise<boolean> => {
     const rows = await this.db
       .select({ id: agents.id })

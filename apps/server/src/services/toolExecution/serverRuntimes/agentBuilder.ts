@@ -274,6 +274,14 @@ export const agentBuilderRuntime: ServerRuntimeRegistration = {
         }
 
         try {
+          // Captured BEFORE the write: the result card renders a diff of the
+          // prompt, and without this the gateway path shipped no `previousPrompt`
+          // at all — so every cloud-run update fell back to the plain "here is the
+          // new prompt" preview and the diff was only ever visible on the client
+          // -executed path. Read as `undefined` when the agent had no prompt, so
+          // a first-time write still previews instead of diffing against nothing.
+          const previousPrompt = (await agentModel.getAgentSystemRole(agentId)) ?? undefined;
+
           await agentModel.update(agentId, {
             editorData: null,
             systemRole: params.prompt,
@@ -283,7 +291,7 @@ export const agentBuilderRuntime: ServerRuntimeRegistration = {
             content: params.prompt
               ? `Successfully updated system prompt (${params.prompt.length} characters)`
               : 'Successfully cleared system prompt',
-            state: { agentId, newPrompt: params.prompt, success: true },
+            state: { agentId, newPrompt: params.prompt, previousPrompt, success: true },
             success: true,
           };
         } catch (error) {

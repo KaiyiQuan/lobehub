@@ -8,6 +8,7 @@ const {
   mockCreatePlugin,
   mockFindById,
   mockGetAgentConfigById,
+  mockGetAgentSystemRole,
   mockGetAiProviderList,
   mockGetAiProviderModelList,
   mockGetHiddenBuiltinModelsForUser,
@@ -17,6 +18,7 @@ const {
   mockCreatePlugin: vi.fn(),
   mockFindById: vi.fn(),
   mockGetAgentConfigById: vi.fn(),
+  mockGetAgentSystemRole: vi.fn(),
   mockGetAiProviderList: vi.fn(),
   mockGetAiProviderModelList: vi.fn(),
   mockGetHiddenBuiltinModelsForUser: vi.fn(),
@@ -33,6 +35,7 @@ vi.mock('@/database/models/agent', () => ({
   AgentModel: vi.fn(function () {
     return {
       getAgentConfigById: mockGetAgentConfigById,
+      getAgentSystemRole: mockGetAgentSystemRole,
       update: mockUpdateAgent,
       updateConfig: mockUpdateConfig,
     };
@@ -84,6 +87,7 @@ describe('agentBuilderRuntime', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetHiddenBuiltinModelsForUser.mockResolvedValue(undefined);
+    mockGetAgentSystemRole.mockResolvedValue(null);
   });
 
   describe('getAvailableModels', () => {
@@ -246,6 +250,38 @@ describe('agentBuilderRuntime', () => {
         },
         success: true,
       });
+    });
+
+    it('records the pre-update prompt so the result renders a diff', async () => {
+      mockGetAgentSystemRole.mockResolvedValue('the old prompt');
+
+      const runtime = createRuntime();
+      const result = await runtime.updatePrompt(
+        { prompt: 'the new prompt' },
+        { agentId: 'builder-agent', editingAgentId: 'target-agent', toolManifestMap: {} },
+      );
+
+      // Read against the editing target, and BEFORE the write — otherwise the
+      // captured value is the prompt we just wrote and the diff is always empty.
+      expect(mockGetAgentSystemRole).toHaveBeenCalledWith('target-agent');
+      expect(mockGetAgentSystemRole.mock.invocationCallOrder[0]).toBeLessThan(
+        mockUpdateAgent.mock.invocationCallOrder[0],
+      );
+      expect(result).toMatchObject({
+        state: { newPrompt: 'the new prompt', previousPrompt: 'the old prompt' },
+        success: true,
+      });
+    });
+
+    it('leaves previousPrompt unset when the agent had no prompt yet', async () => {
+      mockGetAgentSystemRole.mockResolvedValue(null);
+
+      const result = await createRuntime().updatePrompt(
+        { prompt: 'first prompt' },
+        { editingAgentId: 'target-agent', toolManifestMap: {} },
+      );
+
+      expect((result.state as { previousPrompt?: string }).previousPrompt).toBeUndefined();
     });
   });
 

@@ -11,6 +11,8 @@ const {
   mockGetAssistantList,
   mockQueryAgents,
   mockGetAgentConfigById,
+  mockGetAgentSystemRole,
+  mockUpdateAgent,
   mockUpdateConfig,
   mockFindById,
   mockCreatePlugin,
@@ -19,8 +21,10 @@ const {
   mockCreatePlugin: vi.fn(),
   mockFindById: vi.fn(),
   mockGetAgentConfigById: vi.fn(),
+  mockGetAgentSystemRole: vi.fn(),
   mockGetAssistantList: vi.fn(),
   mockQueryAgents: vi.fn(),
+  mockUpdateAgent: vi.fn(),
   mockUpdateConfig: vi.fn(),
 }));
 
@@ -29,7 +33,9 @@ vi.mock('@/database/models/agent', () => ({
     return {
       countAgents: mockCountAgents,
       getAgentConfigById: mockGetAgentConfigById,
+      getAgentSystemRole: mockGetAgentSystemRole,
       queryAgents: mockQueryAgents,
+      update: mockUpdateAgent,
       updateConfig: mockUpdateConfig,
     };
   }),
@@ -79,6 +85,28 @@ const makeAgents = (count: number, startIndex = 0) =>
 describe('agentManagementRuntime', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetAgentSystemRole.mockResolvedValue(null);
+  });
+
+  describe('updatePrompt', () => {
+    it('records the pre-update prompt so the result renders a diff', async () => {
+      mockGetAgentSystemRole.mockResolvedValue('the old prompt');
+
+      const result = await createRuntime().updatePrompt({
+        agentId: 'agent-1',
+        prompt: 'the new prompt',
+      });
+
+      expect(mockGetAgentSystemRole).toHaveBeenCalledWith('agent-1');
+      // Before the write, or the captured value is the prompt we just wrote.
+      expect(mockGetAgentSystemRole.mock.invocationCallOrder[0]).toBeLessThan(
+        mockUpdateAgent.mock.invocationCallOrder[0],
+      );
+      expect(result).toMatchObject({
+        state: { newPrompt: 'the new prompt', previousPrompt: 'the old prompt' },
+        success: true,
+      });
+    });
   });
 
   it('declares the agent management runtime identifier', () => {

@@ -412,6 +412,10 @@ export const agentManagementRuntime: ServerRuntimeRegistration = {
       updatePrompt: async (params: UpdatePromptParams): Promise<ToolExecutionResult> => {
         try {
           const { agentId, prompt } = params;
+          // Captured BEFORE the write so the shared prompt-diff card can render a
+          // diff instead of a bare preview; see the Agent Builder runtime.
+          const previousPrompt = (await agentModel.getAgentSystemRole(agentId)) ?? undefined;
+
           await agentModel.update(agentId, { editorData: null, systemRole: prompt } as Record<
             string,
             unknown
@@ -421,7 +425,7 @@ export const agentManagementRuntime: ServerRuntimeRegistration = {
             content: prompt
               ? `Successfully updated system prompt (${prompt.length} characters)`
               : 'Successfully cleared system prompt',
-            state: { newPrompt: prompt, success: true },
+            state: { newPrompt: prompt, previousPrompt, success: true },
             success: true,
           };
         } catch (error) {

@@ -259,6 +259,9 @@ const resolveWorkspaceInit = async (
     const boundCwdConfig = resolveDeviceWorkingDirectoryConfig({
       deviceDefaultCwd: device.defaultCwd,
       deviceId: activeDeviceId,
+      // A directory that is one of the topic's repos is not a path on this
+      // machine — skip it (see the resolver) and scan what the device has.
+      repos: topic?.metadata?.repos,
       topicWorkingDirectory,
       topicWorkingDirectoryConfig: topic?.metadata?.workingDirectoryConfig,
       workingDirByDevice: agencyConfig?.workingDirByDevice,

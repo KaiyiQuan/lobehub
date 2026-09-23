@@ -52,7 +52,7 @@ describe('GoalTraceModel', () => {
         advancesTotal: 7,
         finalStatus: 'completed',
         goalId: goal.id,
-        totalCost: '1.25',
+        totalCost: 1.25,
       });
 
       expect(updated.advancesTotal).toBe(7);

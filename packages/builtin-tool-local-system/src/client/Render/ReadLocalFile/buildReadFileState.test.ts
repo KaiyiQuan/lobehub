@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildReadFileState } from './buildReadFileState';
+import { buildReadFileState, getFirstLineNumber } from './buildReadFileState';
 
 describe('buildReadFileState', () => {
   it('keeps the card for a successful builtin read of an empty file', () => {
@@ -69,5 +69,29 @@ describe('buildReadFileState', () => {
     });
 
     expect(state?.loc).toEqual([5, 14]);
+  });
+});
+
+describe('getFirstLineNumber', () => {
+  it('converts the builtin 0-based loc into a 1-based line number', () => {
+    expect(getFirstLineNumber({ pluginState: { loc: [160, 181] } })).toBe(161);
+    expect(getFirstLineNumber({ pluginState: { loc: [0, 200] } })).toBe(1);
+  });
+
+  it('keeps the 1-based offset arg used by OpenCode and Pi', () => {
+    expect(getFirstLineNumber({ args: { offset: 20, path: '/repo/a.ts' } })).toBe(20);
+  });
+
+  it('prefers the reported loc over the requested offset', () => {
+    expect(
+      getFirstLineNumber({
+        args: { offset: 5, path: '/repo/a.ts' },
+        pluginState: { loc: [9, 20] },
+      }),
+    ).toBe(10);
+  });
+
+  it('starts at line 1 when no range is known', () => {
+    expect(getFirstLineNumber({ args: { path: '/repo/a.ts' } })).toBe(1);
   });
 });

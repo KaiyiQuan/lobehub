@@ -62,3 +62,21 @@ export const buildReadFileState = ({
     path: filePath,
   };
 };
+
+/**
+ * 1-based number of the first line in the read content, used to seed the
+ * preview's line-number gutter.
+ *
+ * The builtin tools report `loc` as a 0-based, end-exclusive slice (see
+ * local-file-shell `readLocalFile`), while OpenCode / Pi take a 1-based
+ * `offset` arg, so the two sources are resolved separately.
+ */
+export const getFirstLineNumber = ({
+  args,
+  pluginState,
+}: Pick<BuildReadFileStateInput, 'args' | 'pluginState'>): number => {
+  const loc = pluginState?.loc;
+  if (loc) return Math.max(loc[0], 0) + 1;
+  if (args?.offset !== undefined) return Math.max(args.offset, 1);
+  return 1;
+};

@@ -159,6 +159,7 @@
   "localFiles.open": "打开",
   "localFiles.openFile": "打开文件",
   "localFiles.openFolder": "打开文件夹",
+  "localFiles.openInPanel": "在右侧打开",
   "localFiles.outOfScope.requestedPaths": "请求的路径",
   "localFiles.outOfScope.warning": "警告：以下路径超出了配置的工作目录范围。请确认是否允许访问。",
   "localFiles.outOfScope.workingDirectory": "工作目录",

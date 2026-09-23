@@ -7,7 +7,6 @@ import { AgentAccess, AgentDocumentModel } from '@/database/models/agentDocument
 import type { LobeChatDatabase } from '@/database/type';
 
 import * as headlessEditor from '../agentDocuments/headlessEditor';
-import { FileService } from '../file';
 import { AgentDocumentVfsService } from './index';
 import { createSkillMount } from './mounts/skills/createSkillMount';
 
@@ -29,12 +28,16 @@ vi.mock('./mounts/skills/createSkillMount', () => ({
   createSkillMount: vi.fn(),
 }));
 
-vi.mock('../file', () => ({ FileService: vi.fn() }));
+const removeUnreferencedFile = vi.hoisted(() => vi.fn());
+vi.mock('../file', () => ({
+  FileService: vi.fn(function () {
+    return { removeUnreferencedFile };
+  }),
+}));
 
 describe('AgentDocumentVfsService', () => {
   const db = {} as LobeChatDatabase;
   const userId = 'user-1';
-  const removeUnreferencedFile = vi.fn();
   const mockAgentDocumentModel = {
     create: vi.fn(),
     findByDocumentId: vi.fn(),
@@ -58,9 +61,6 @@ describe('AgentDocumentVfsService', () => {
 
   beforeEach(() => {
     removeUnreferencedFile.mockReset().mockResolvedValue(undefined);
-    vi.mocked(FileService).mockImplementation(function () {
-      return { removeUnreferencedFile } as FileService;
-    });
     for (const method of Object.values(mockAgentDocumentModel)) {
       method.mockReset();
     }

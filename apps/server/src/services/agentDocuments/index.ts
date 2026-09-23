@@ -157,14 +157,13 @@ export class AgentDocumentsService {
   private agentDocumentModel: AgentDocumentModel;
   private documentService: DocumentService;
   private fileModel: FileModel;
-  private fileService: FileService;
-  private userId: string;
+  private fileServiceInstance?: FileService;
   private topicDocumentModel: TopicDocumentModel;
 
   constructor(
-    db: LobeChatDatabase,
-    userId: string,
-    workspaceId?: string,
+    private readonly db: LobeChatDatabase,
+    private readonly userId: string,
+    private readonly workspaceId?: string,
     callerAgentVisibility?: 'private' | 'public' | null,
     documentAccessScope: DocumentAccessScope = ordinaryDocumentAccessScope,
   ) {
@@ -180,9 +179,12 @@ export class AgentDocumentsService {
       documentAccessScope,
     );
     this.fileModel = new FileModel(db, userId, workspaceId);
-    this.fileService = new FileService(db, userId, workspaceId);
-    this.userId = userId;
     this.topicDocumentModel = new TopicDocumentModel(db, userId, workspaceId, documentAccessScope);
+  }
+
+  /** Defers storage configuration until upload cleanup; native documents need only the database. */
+  private get fileService(): FileService {
+    return (this.fileServiceInstance ??= new FileService(this.db, this.userId, this.workspaceId));
   }
 
   private async projectDocumentContent<T extends ProjectableAgentDocument>(doc: T): Promise<T>;

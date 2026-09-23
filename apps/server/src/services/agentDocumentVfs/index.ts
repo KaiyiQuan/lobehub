@@ -106,12 +106,20 @@ interface AgentDocumentCopyOptions {
 export class AgentDocumentVfsService {
   private agentDocumentModel: AgentDocumentModel;
   private skillMount: SkillMount;
-  private fileService: FileService;
+  private fileServiceInstance?: FileService;
 
-  constructor(db: LobeChatDatabase, userId: string, workspaceId?: string) {
+  constructor(
+    private readonly db: LobeChatDatabase,
+    private readonly userId: string,
+    private readonly workspaceId?: string,
+  ) {
     this.agentDocumentModel = new AgentDocumentModel(db, userId, workspaceId);
     this.skillMount = createSkillMount(db, userId, workspaceId);
-    this.fileService = new FileService(db, userId, workspaceId);
+  }
+
+  /** Defers storage configuration until a permanent deletion actually has uploads to reclaim. */
+  private get fileService(): FileService {
+    return (this.fileServiceInstance ??= new FileService(this.db, this.userId, this.workspaceId));
   }
 
   /**

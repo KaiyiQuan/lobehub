@@ -179,6 +179,24 @@ describe('AgentDocumentsService', () => {
   });
 
   describe('createDocument', () => {
+    /** @example Native document creation works without object-storage configuration. */
+    it('does not initialize file storage when creating a native document', async () => {
+      // ROOT CAUSE:
+      // Eager cleanup-service construction made ordinary agent operations require S3.
+      // Storage must only initialize when an operation actually needs file cleanup.
+      vi.mocked(FileService).mockImplementationOnce(function () {
+        throw new Error('Storage is not configured');
+      });
+      mockModel.findByParentAndFilename.mockResolvedValue(undefined);
+      mockModel.create.mockResolvedValue({ id: 'native-document' });
+      const service = new AgentDocumentsService(db, userId);
+      /** @example Creating text content never contacts storage. */
+      await expect(service.createDocument('agent-1', 'Note', 'hello')).resolves.toBeDefined();
+      /** @example The storage dependency stays uninitialized. */
+      expect(FileService).not.toHaveBeenCalled();
+      vi.mocked(FileService).mockReset();
+    });
+
     it('should append a numeric suffix when the base filename already exists', async () => {
       mockModel.findByParentAndFilename
         .mockResolvedValueOnce({ id: 'existing-doc' })

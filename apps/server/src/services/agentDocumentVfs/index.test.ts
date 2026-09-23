@@ -7,6 +7,7 @@ import { AgentAccess, AgentDocumentModel } from '@/database/models/agentDocument
 import type { LobeChatDatabase } from '@/database/type';
 
 import * as headlessEditor from '../agentDocuments/headlessEditor';
+import { FileService } from '../file';
 import { AgentDocumentVfsService } from './index';
 import { createSkillMount } from './mounts/skills/createSkillMount';
 
@@ -60,6 +61,7 @@ describe('AgentDocumentVfsService', () => {
   };
 
   beforeEach(() => {
+    vi.mocked(FileService).mockClear();
     removeUnreferencedFile.mockReset().mockResolvedValue(undefined);
     for (const method of Object.values(mockAgentDocumentModel)) {
       method.mockReset();
@@ -76,6 +78,15 @@ describe('AgentDocumentVfsService', () => {
       const result = await mockAgentDocumentModel.findByParentAndFilename(...args);
       return result ? [result] : [];
     });
+  });
+
+  /** @example Native VFS browsing remains available without object storage. */
+  it('does not initialize storage when listing native documents', async () => {
+    mockAgentDocumentModel.listByParent.mockResolvedValue([]);
+    const service = new AgentDocumentVfsService(db, userId);
+    await service.list('./', { agentId: 'agent-1' });
+    /** @example Browsing a document tree has no storage configuration prerequisite. */
+    expect(FileService).not.toHaveBeenCalled();
   });
 
   afterEach(() => {

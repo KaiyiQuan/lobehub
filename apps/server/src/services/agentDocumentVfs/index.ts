@@ -1,4 +1,5 @@
 import type { LobeChatDatabase } from '@lobechat/database';
+import { FileSource } from '@lobechat/types';
 
 import type { AgentDocument } from '@/database/models/agentDocuments';
 import {
@@ -13,6 +14,7 @@ import {
   RAW_TEXT_DOCUMENT_FILE_TYPE,
 } from '../agentDocuments/contentFormat';
 import { createMarkdownEditorSnapshot } from '../agentDocuments/headlessEditor';
+import { FileService } from '../file';
 import { AgentDocumentVfsError } from './errors';
 import { createSkillMount } from './mounts/skills/createSkillMount';
 import {
@@ -104,10 +106,12 @@ interface AgentDocumentCopyOptions {
 export class AgentDocumentVfsService {
   private agentDocumentModel: AgentDocumentModel;
   private skillMount: SkillMount;
+  private fileService: FileService;
 
   constructor(db: LobeChatDatabase, userId: string, workspaceId?: string) {
     this.agentDocumentModel = new AgentDocumentModel(db, userId, workspaceId);
     this.skillMount = createSkillMount(db, userId, workspaceId);
+    this.fileService = new FileService(db, userId, workspaceId);
   }
 
   /**
@@ -619,7 +623,10 @@ export class AgentDocumentVfsService {
     const subtree = await this.collectOrdinarySubtree(root, ctx.agentId, true);
 
     for (const item of subtree.reverse()) {
-      await this.agentDocumentModel.permanentlyDelete(item.id);
+      const fileIds = await this.agentDocumentModel.permanentlyDelete(item.id);
+      for (const fileId of fileIds) {
+        await this.fileService.removeUnreferencedFile(fileId, FileSource.AgentDocument);
+      }
     }
   }
 

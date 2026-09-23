@@ -1,11 +1,13 @@
 // @vitest-environment node
 import { AGENT_DOCUMENT_FILE_TYPE } from '@lobechat/const';
+import { FileSource } from '@lobechat/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AgentAccess, AgentDocumentModel } from '@/database/models/agentDocuments';
 import type { LobeChatDatabase } from '@/database/type';
 
 import * as headlessEditor from '../agentDocuments/headlessEditor';
+import { FileService } from '../file';
 import { AgentDocumentVfsService } from './index';
 import { createSkillMount } from './mounts/skills/createSkillMount';
 
@@ -27,9 +29,12 @@ vi.mock('./mounts/skills/createSkillMount', () => ({
   createSkillMount: vi.fn(),
 }));
 
+vi.mock('../file', () => ({ FileService: vi.fn() }));
+
 describe('AgentDocumentVfsService', () => {
   const db = {} as LobeChatDatabase;
   const userId = 'user-1';
+  const removeUnreferencedFile = vi.fn();
   const mockAgentDocumentModel = {
     create: vi.fn(),
     findByDocumentId: vi.fn(),
@@ -52,9 +57,14 @@ describe('AgentDocumentVfsService', () => {
   };
 
   beforeEach(() => {
+    removeUnreferencedFile.mockReset().mockResolvedValue(undefined);
+    vi.mocked(FileService).mockImplementation(function () {
+      return { removeUnreferencedFile } as FileService;
+    });
     for (const method of Object.values(mockAgentDocumentModel)) {
       method.mockReset();
     }
+    mockAgentDocumentModel.permanentlyDelete.mockResolvedValue([]);
     for (const method of Object.values(mockSkillMount)) {
       method.mockReset();
     }
@@ -740,6 +750,12 @@ ${'lossless tool result\n'.repeat(100)}
   });
 
   it('permanently deletes ordinary directory subtrees child-first', async () => {
+    // ROOT CAUSE:
+    // Permanent deletion removed document rows without reclaiming hidden backing uploads.
+    // Returned file IDs now go through reference-safe cleanup after each committed deletion.
+    mockAgentDocumentModel.permanentlyDelete
+      .mockResolvedValueOnce(['child-file'])
+      .mockResolvedValueOnce([]);
     mockAgentDocumentModel.findByIdWithOptions.mockResolvedValue({
       accessSelf: AgentAccess.READ | AgentAccess.WRITE | AgentAccess.LIST,
       content: '',
@@ -780,6 +796,8 @@ ${'lossless tool result\n'.repeat(100)}
       2,
       'folder-agent-doc-1',
     );
+    /** @example The child upload is reclaimed using the dedicated source policy. */
+    expect(removeUnreferencedFile.mock.calls).toEqual([['child-file', FileSource.AgentDocument]]);
   });
 
   it('opts read-only mounted skill paths out of trash deletes', async () => {

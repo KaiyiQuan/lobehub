@@ -1313,6 +1313,17 @@ describe('fileRouter', () => {
   });
 
   describe('removeUnreferencedFile', () => {
+    /** @example A client retry after server-side cleanup succeeds without touching storage. */
+    it('accepts cleanup of an already removed upload', async () => {
+      mockFileModelFindById.mockResolvedValue(undefined);
+      /** @example Repeating cleanup is idempotent. */
+      await expect(
+        caller.removeUnreferencedFile({ id: 'removed-upload' }),
+      ).resolves.toBeUndefined();
+      /** @example Missing files do not trigger another storage deletion. */
+      expect(mockFileServiceDeleteFile).not.toHaveBeenCalled();
+    });
+
     it('keeps object storage when the file became referenced before cleanup', async () => {
       mockFileModelFindById.mockResolvedValue({ id: 'voice-file', userId: 'test-user' });
       mockFileModelDeleteUnreferenced.mockResolvedValue(undefined);

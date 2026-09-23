@@ -922,7 +922,8 @@ export const fileRouter = router({
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
       const existing = await ctx.fileModel.findById(input.id);
-      if (!existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'File not found' });
+      // Import failure cleanup can run on both server and client; retries are harmless.
+      if (!existing) return;
       await assertFileNotInRestrictedKnowledgeBase(ctx, input.id);
 
       const file = await ctx.fileModel.deleteUnreferenced(input.id, {

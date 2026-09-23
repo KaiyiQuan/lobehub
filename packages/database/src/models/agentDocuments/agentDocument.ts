@@ -12,6 +12,7 @@ import {
   isNull,
   like,
   ne,
+  notExists,
   or,
   sql,
 } from 'drizzle-orm';
@@ -1614,44 +1615,89 @@ export class AgentDocumentModel {
       );
   }
 
-  async permanentlyDelete(documentId: string): Promise<void> {
+  /**
+   * Removes a binding and its document when no other agent still owns that document.
+   *
+   * Use when:
+   * - Permanently deleting an agent trash entry.
+   * Expects:
+   * - The binding belongs to the current scope.
+   * Returns:
+   * - Backing file IDs for reference-safe cleanup by the storage service after commit.
+   */
+  async permanentlyDelete(documentId: string): Promise<string[]> {
     const existing = await this.findByIdWithOptions(documentId, { includeDeleted: true });
 
-    if (!existing) return;
+    if (!existing) return [];
 
-    await this.db.transaction(async (trx) => {
+    return this.db.transaction(async (trx) => {
       await trx
         .delete(agentDocuments)
         .where(and(eq(agentDocuments.id, documentId), this.agentDocOwnership()));
 
-      await trx
-        .delete(documents)
-        .where(and(eq(documents.id, existing.documentId), this.documentOwnership()));
+      return this.deleteUnboundDocuments(trx, [existing.documentId]);
     });
   }
 
+  /**
+   * Permanently removes a subtree's bindings and documents without deleting shared documents.
+   *
+   * Use when:
+   * - Erasing a complete document subtree in one transaction.
+   * Expects:
+   * - The root belongs to the requested agent and current scope.
+   * Returns:
+   * - Backing file IDs requiring reference-safe storage cleanup after commit.
+   */
   async permanentlyDeleteSubtreeByDocumentId(
     agentId: string,
     rootDocumentId: string,
-  ): Promise<void> {
+  ): Promise<string[]> {
     const subtree = await this.listSubtreeByDocumentId(agentId, rootDocumentId, {
       includeDeleted: true,
     });
 
-    if (subtree.length === 0) return;
+    if (subtree.length === 0) return [];
 
     const agentDocumentIds = subtree.map((item) => item.id);
     const documentIds = subtree.map((item) => item.documentId);
 
-    await this.db.transaction(async (trx) => {
+    return this.db.transaction(async (trx) => {
       await trx
         .delete(agentDocuments)
         .where(and(this.agentDocOwnership(), inArray(agentDocuments.id, agentDocumentIds)));
 
-      await trx
-        .delete(documents)
-        .where(and(this.documentOwnership(), inArray(documents.id, documentIds)));
+      return this.deleteUnboundDocuments(trx, documentIds);
     });
+  }
+
+  /** Removes only documents with no surviving agent binding and returns their backing files. */
+  private async deleteUnboundDocuments(trx: Transaction, documentIds: string[]): Promise<string[]> {
+    // Serialize deletion with concurrent binding FK inserts before inspecting surviving owners.
+    await trx
+      .select({ id: documents.id })
+      .from(documents)
+      .where(and(this.documentOwnership(), inArray(documents.id, documentIds)))
+      .orderBy(documents.id)
+      .for('update');
+    // Removing one agent's binding must not cascade through another agent's shared document.
+    const removed = await trx
+      .delete(documents)
+      .where(
+        and(
+          this.documentOwnership(),
+          inArray(documents.id, documentIds),
+          notExists(
+            trx
+              .select({ id: agentDocuments.id })
+              .from(agentDocuments)
+              .where(eq(agentDocuments.documentId, documents.id)),
+          ),
+        ),
+      )
+      .returning({ fileId: documents.fileId });
+
+    return [...new Set(removed.flatMap(({ fileId }) => (fileId ? [fileId] : [])))];
   }
 
   async deleteByAgent(agentId: string, deleteReason?: string): Promise<void> {

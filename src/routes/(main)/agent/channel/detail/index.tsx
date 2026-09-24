@@ -19,6 +19,7 @@ import {
   BOT_RUNTIME_STATUSES,
   type BotRuntimeStatusSnapshot,
 } from '../../../../../types/botRuntimeStatus';
+import { keepPendingConnectResult, toTestResult } from './actionResults';
 import Body from './Body';
 import Footer from './Footer';
 import { getChannelFormValues, mergeSettingsWithDefaults } from './formState';
@@ -429,29 +430,13 @@ const PlatformDetail = memo<PlatformDetailProps>(
       setTesting(true);
       setSaveResult(undefined);
       setTestResult(undefined);
-      // The latest action's outcome is the one shown: a stale "Bot connected"
-      // banner next to a failed test reads as contradictory. Keep an
-      // in-progress queued/starting notice so the connect polling loop is
-      // not visually interrupted.
-      setConnectResult((prev) => (prev?.type === 'info' ? prev : undefined));
+      setConnectResult(keepPendingConnectResult);
       try {
         const result = await testConnection({
           applicationId: currentConfig.applicationId,
           platform: platformDef.id,
         });
-        if (result.valid) {
-          setTestResult({ type: 'success' });
-          return;
-        }
-        // Recognized failures carry a code with a localized guidance line;
-        // keep the platform's raw message underneath so the exact reason
-        // (e.g. the Feishu error code) is still visible.
-        const code = result.errors.find((e) => e.code)?.code;
-        setTestResult({
-          errorDetail: result.message,
-          hint: code ? t(`channel.connectionError.${code}`) : undefined,
-          type: 'error',
-        });
+        setTestResult(toTestResult(result, t));
       } catch (e: any) {
         setTestResult({
           errorDetail: e?.message || String(e),

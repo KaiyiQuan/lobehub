@@ -1,6 +1,7 @@
 import type {
   AcceptanceCommentAttachmentRef,
   AcceptanceCommentKind,
+  AcceptanceCommentSource,
   AcceptanceReviewAnnotation,
   DocumentCommentJson,
 } from '@lobechat/types';
@@ -43,6 +44,8 @@ export interface CreateAcceptanceCommentParams {
   /** The editor's JSON, when a person wrote the body in one. */
   editorData?: DocumentCommentJson;
   kind?: AcceptanceCommentKind;
+  /** Open, server-written per-remark facts. */
+  metadata?: Record<string, unknown>;
   parentCommentId?: string;
   /**
    * Ceiling for this author on this acceptance, enforced inside the write's own
@@ -51,6 +54,8 @@ export interface CreateAcceptanceCommentParams {
    * commits, which is exactly how a flood arrives.
    */
   rateLimit?: { max: number; since: Date };
+  /** The product page the remark was made on (embedded review toolbar). */
+  source?: AcceptanceCommentSource;
   workspaceId?: string | null;
 }
 
@@ -127,6 +132,9 @@ export class AcceptanceCommentModel {
           evidenceId: anchor?.evidenceId ?? null,
           kind: isReply ? 'comment' : (params.kind ?? 'comment'),
           parentCommentId: parentCommentId ?? null,
+          metadata: params.metadata ?? null,
+          // A page belongs to the thread it opened, never to a reply or reaction.
+          source: parentCommentId ? null : (params.source ?? null),
           workspaceId: params.workspaceId ?? null,
         })
         .onConflictDoNothing({

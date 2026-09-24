@@ -14,6 +14,8 @@ table acceptance_comments {
   content text [not null]
   editor_data jsonb
   attachments jsonb
+  source jsonb
+  metadata jsonb
   client_id text [not null]
   resolved_at "timestamp with time zone"
   resolved_by_user_id text

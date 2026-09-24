@@ -145,6 +145,36 @@ describe('AcceptanceCommentModel', () => {
       expect(nested.parentCommentId).toBe(root.id);
     });
 
+    it('keeps the product page and metadata on a thread root, never on a reply', async () => {
+      const source = {
+        kind: 'product-page' as const,
+        selector: '#run-status',
+        url: 'https://product.example.com/experiments',
+      };
+      const { comment: root } = await model.create({
+        acceptanceId,
+        authorUserId: reviewer,
+        clientId: 'page-root',
+        content: 'Failure reason is not visible',
+        metadata: { via: 'review-toolbar' },
+        source,
+      });
+      const { comment: reply } = await model.create({
+        acceptanceId,
+        authorUserId: owner,
+        clientId: 'page-reply',
+        content: 'Agreed',
+        metadata: { via: 'viewer' },
+        parentCommentId: root.id,
+        source,
+      });
+
+      expect(root).toMatchObject({ metadata: { via: 'review-toolbar' }, source });
+      // A reply answers the page its thread was opened on; it does not name one.
+      expect(reply.source).toBeNull();
+      expect(reply.metadata).toEqual({ via: 'viewer' });
+    });
+
     it('rejects a parent that belongs to another acceptance', async () => {
       const { comment: foreign } = await model.create({
         acceptanceId: otherAcceptanceId,

@@ -436,7 +436,11 @@ const PlatformDetail = memo<PlatformDetailProps>(
           applicationId: currentConfig.applicationId,
           platform: platformDef.id,
         });
-        setTestResult(toTestResult(result, t));
+        setTestResult(
+          toTestResult(result, (code) =>
+            t(`channel.connectionError.${code}`, { defaultValue: '' }),
+          ),
+        );
       } catch (e: any) {
         setTestResult({
           errorDetail: e?.message || String(e),

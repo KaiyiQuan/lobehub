@@ -974,9 +974,9 @@ export function normalizeBotReactionMode(value: unknown): BotReactionMode {
 export type BotReactionPhase = 'clear' | 'received' | 'step' | 'thinking';
 
 /**
- * Whether a reaction API call is allowed for `phase` under `mode`. `clear` is
- * skipped only for `none` — there is nothing to remove — so a bot switched
- * from `full` to `minimal` mid-run still cleans up whatever it had applied.
+ * Whether a reaction API call is allowed for `phase` under `mode`. For `clear`
+ * this only gates the untracked legacy fallback: a reaction the run actually
+ * applied is always removed, even after a mid-run switch to `none`.
  */
 export function shouldApplyReaction(mode: BotReactionMode, phase: BotReactionPhase): boolean {
   if (mode === 'none') return false;

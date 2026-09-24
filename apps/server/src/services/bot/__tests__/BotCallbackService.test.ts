@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
+
 import type { BotCallbackBody } from '../BotCallbackService';
 import { BotCallbackService } from '../BotCallbackService';
 
@@ -1108,6 +1110,28 @@ describe('BotCallbackService', () => {
 
       expect(mockReplaceReaction).not.toHaveBeenCalled();
       expect(mockRemoveReaction).not.toHaveBeenCalled();
+    });
+
+    it('still clears a tracked reaction after the bot is switched to none mid-run', async () => {
+      const redis = {
+        del: vi.fn(),
+        get: vi
+          .fn()
+          .mockResolvedValue(JSON.stringify({ emoji: '🤔', reactionThreadId: 'thread-a' })),
+      };
+      vi.mocked(getAgentRuntimeRedisClient).mockReturnValue(redis as any);
+      try {
+        setupCredentials(FAKE_CREDENTIALS, {
+          settings: { displayToolCalls: true, reactionMode: 'none' },
+        });
+
+        await service.handleCallback(completionBody());
+
+        expect(mockReplaceReaction).toHaveBeenCalledWith('user-msg-1', '🤔', null);
+        expect(redis.del).toHaveBeenCalled();
+      } finally {
+        vi.mocked(getAgentRuntimeRedisClient).mockReturnValue(null);
+      }
     });
 
     it('treats an unknown persisted value as the default (minimal)', async () => {

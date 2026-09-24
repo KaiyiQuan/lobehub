@@ -220,9 +220,13 @@ export class BotCallbackService {
         options?.deliveredChunkCount,
         options?.onChunkDelivered,
       );
-      if (shouldApplyReaction(reactionMode, 'clear')) {
-        await this.clearStepReaction(body, client, platform);
-      }
+      // Cleanup follows what was actually applied, not the current setting: a
+      // run that placed a reaction must still remove it after the bot is
+      // switched to `none` mid-run. The setting only decides whether to fall
+      // back to the legacy 👀 when nothing was tracked.
+      await this.clearStepReaction(body, client, platform, {
+        fallbackToReceived: shouldApplyReaction(reactionMode, 'clear'),
+      });
       // Clear the active thread tracker so the thread can accept new messages.
       // In queue mode, the bridge handler's finally block skips this cleanup
       // to keep the thread marked active while the agent runs on the job queue.
@@ -703,17 +707,21 @@ export class BotCallbackService {
   /**
    * Remove whatever emoji was last applied to the user message and clear the
    * tracking state. Falls back to the legacy `👀` when no state is recorded
-   * so pre-feature runs (or runs against a Redis-less setup) still clean up.
+   * so pre-feature runs (or runs against a Redis-less setup) still clean up,
+   * unless `fallbackToReceived` is off (reaction mode `none`).
    */
   private async clearStepReaction(
     body: BotCallbackBody,
     client: PlatformClient,
     platform: string,
+    { fallbackToReceived }: { fallbackToReceived: boolean },
   ): Promise<void> {
     const { userMessageId, applicationId, platformThreadId } = body;
     if (!userMessageId) return;
 
     const state = await getReactionState(platform, applicationId, userMessageId);
+    // Nothing tracked and reactions are off: there is nothing to remove.
+    if (!state && !fallbackToReceived) return;
     const emoji = state?.emoji ?? '👀';
 
     // Thread-starter messages may live in the parent channel (e.g. Discord),

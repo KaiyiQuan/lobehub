@@ -434,7 +434,10 @@ describe('FeishuWebhookClient.extractFiles — quoted (parent) message', () => {
       }),
     );
 
-    expect(result?.map((f) => f.name)).toEqual(['image.jpg', 'q.pdf']);
+    expect(result).toEqual([
+      expect.objectContaining({ name: 'image.jpg' }),
+      expect.objectContaining({ name: 'q.pdf' }),
+    ]);
   });
 
   it('falls back to the sender open_id when the contact API is unavailable', async () => {

@@ -16,14 +16,14 @@ export type TestConnectionOutcome = TestConnectionFailure | { valid: true };
  */
 export const toTestResult = (
   outcome: TestConnectionOutcome,
-  t: (key: string) => string,
+  hintForCode: (code: string) => string,
 ): TestResult => {
   if (outcome.valid) return { type: 'success' };
 
   const code = outcome.errors.find((e) => e.code)?.code;
   return {
     errorDetail: outcome.message,
-    hint: code ? t(`channel.connectionError.${code}`) : undefined,
+    hint: (code && hintForCode(code)) || undefined,
     type: 'error',
   };
 };

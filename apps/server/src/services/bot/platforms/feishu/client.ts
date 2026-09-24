@@ -233,7 +233,11 @@ async function feishuExtractFiles(
     // the model sees `<referenced_message sender="…">` for Feishu replies too.
     // `raw` is the object `formatPrompt` reads a moment later in the bridge.
     if (quoted.text) {
-      (raw as Record<string, unknown>).referenced_message = {
+      (
+        raw as LarkRawMessage & {
+          referenced_message?: { author: { username: string }; content: string };
+        }
+      ).referenced_message = {
         author: { username: quoted.senderName },
         content: quoted.text,
       };

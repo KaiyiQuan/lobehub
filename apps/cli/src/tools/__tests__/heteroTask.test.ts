@@ -367,7 +367,8 @@ describe('runHeteroTask (openclaw)', () => {
     });
 
     const [, , spawnOptions] = spawnMock.mock.calls[0] as [string, string[], { stdio: string[] }];
-    expect(spawnOptions.stdio).toEqual(['ignore', 'pipe', 'pipe']);
+    // stdout is ignored (not consumed → would hang), stderr is piped.
+    expect(spawnOptions.stdio).toEqual(['ignore', 'ignore', 'pipe']);
 
     child.stderr._emit('Error: session store is locked by the running gateway\n');
     child._emit('close', 1, null);

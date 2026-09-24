@@ -267,9 +267,10 @@ export async function runHeteroTask(params: RunHeteroTaskParams): Promise<string
       cwd: workDir,
       detached: true,
       env: spawnPlan.env,
-      // Pipe stderr so a non-zero exit can surface the agent's real error
-      // (e.g. gateway session-lock conflicts) instead of a bare exit code.
-      stdio: ['ignore', 'pipe', 'pipe'],
+      // Keep stdout ignored (it is not consumed here; piping it without a
+      // reader would fill the OS buffer and hang the child). Pipe stderr so
+      // a non-zero exit can surface the agent's real error.
+      stdio: ['ignore', 'ignore', 'pipe'],
     });
 
     const pid = child.pid;
@@ -278,9 +279,11 @@ export async function runHeteroTask(params: RunHeteroTaskParams): Promise<string
     }
     child.unref();
 
+    // Cap at 8 KB, retaining the tail so the actual failure stays visible.
+    const STDERR_CAP = 8 * 1024;
     let stderr = '';
     child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
+      stderr = `${stderr}${chunk.toString()}`.slice(-STDERR_CAP);
     });
 
     saveTask({

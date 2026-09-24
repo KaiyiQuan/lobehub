@@ -67,6 +67,7 @@
   "claudeCode.askUserQuestion.supplement.enter": "یادداشت‌های اضافی",
   "claudeCode.askUserQuestion.supplement.placeholder": "زمینه‌ای برای پاسخ‌های انتخابی خود اضافه کنید…",
   "claudeCode.askUserQuestion.timeExpired": "زمان به پایان رسید — استفاده از گزینه ۱ برای هر سوال.",
+  "claudeCode.askUserQuestion.timeExpiredNoAnswer": "زمان به پایان رسید — این سؤال دیگر نمی‌تواند پاسخ داده شود.",
   "claudeCode.askUserQuestion.timeRemaining": "زمان باقی‌مانده: {{time}} · سوالات بی‌پاسخ به طور پیش‌فرض به گزینه ۱ در زمان پایان تنظیم می‌شوند.",
   "codeInterpreter-legacy.error": "خطای اجرا",
   "codeInterpreter-legacy.executing": "در حال اجرا...",

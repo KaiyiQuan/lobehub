@@ -67,6 +67,7 @@
   "claudeCode.askUserQuestion.supplement.enter": "Zusätzliche Notizen",
   "claudeCode.askUserQuestion.supplement.placeholder": "Fügen Sie Kontext zu Ihren ausgewählten Antworten hinzu…",
   "claudeCode.askUserQuestion.timeExpired": "Zeit abgelaufen — Option 1 für jede Frage wird verwendet.",
+  "claudeCode.askUserQuestion.timeExpiredNoAnswer": "Zeit abgelaufen – diese Frage kann nicht mehr beantwortet werden.",
   "claudeCode.askUserQuestion.timeRemaining": "Verbleibende Zeit: {{time}} · unbeantwortete Fragen werden bei Ablauf auf Option 1 gesetzt.",
   "codeInterpreter-legacy.error": "Ausführungsfehler",
   "codeInterpreter-legacy.executing": "Wird ausgeführt...",

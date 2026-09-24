@@ -67,6 +67,7 @@
   "claudeCode.askUserQuestion.supplement.enter": "Ek notlar",
   "claudeCode.askUserQuestion.supplement.placeholder": "Seçtiğiniz cevaplara bağlam ekleyin…",
   "claudeCode.askUserQuestion.timeExpired": "Süre doldu — her sorunun 1. seçeneği kullanılıyor.",
+  "claudeCode.askUserQuestion.timeExpiredNoAnswer": "Süre doldu — bu soru artık yanıtlanamaz.",
   "claudeCode.askUserQuestion.timeRemaining": "Kalan süre: {{time}} · cevaplanmayan sorular zaman aşımında 1. seçeneğe varsayılan olarak ayarlanır.",
   "codeInterpreter-legacy.error": "Yürütme Hatası",
   "codeInterpreter-legacy.executing": "Yürütülüyor...",

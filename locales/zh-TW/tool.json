@@ -67,6 +67,7 @@
   "claudeCode.askUserQuestion.supplement.enter": "附加備註",
   "claudeCode.askUserQuestion.supplement.placeholder": "為您選擇的答案添加背景資訊…",
   "claudeCode.askUserQuestion.timeExpired": "時間已到 — 每個問題使用選項 1。",
+  "claudeCode.askUserQuestion.timeExpiredNoAnswer": "時間已過 — 此問題無法再被回答。",
   "claudeCode.askUserQuestion.timeRemaining": "剩餘時間：{{time}} · 未回答的問題在超時時默認為選項 1。",
   "codeInterpreter-legacy.error": "執行錯誤",
   "codeInterpreter-legacy.executing": "執行中...",

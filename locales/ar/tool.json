@@ -67,6 +67,7 @@
   "claudeCode.askUserQuestion.supplement.enter": "ملاحظات إضافية",
   "claudeCode.askUserQuestion.supplement.placeholder": "أضف سياقًا لإجاباتك المختارة...",
   "claudeCode.askUserQuestion.timeExpired": "انتهى الوقت — سيتم استخدام الخيار 1 لكل سؤال.",
+  "claudeCode.askUserQuestion.timeExpiredNoAnswer": "انتهى الوقت — لم يعد بالإمكان الإجابة على هذا السؤال.",
   "claudeCode.askUserQuestion.timeRemaining": "الوقت المتبقي: {{time}} · الأسئلة غير المجابة ستُعتمد على الخيار 1 عند انتهاء الوقت.",
   "codeInterpreter-legacy.error": "خطأ في التنفيذ",
   "codeInterpreter-legacy.executing": "جارٍ التنفيذ...",

@@ -67,6 +67,7 @@
   "claudeCode.askUserQuestion.supplement.enter": "Дополнительные заметки",
   "claudeCode.askUserQuestion.supplement.placeholder": "Добавьте контекст к выбранным ответам…",
   "claudeCode.askUserQuestion.timeExpired": "Время истекло — используется вариант 1 для каждого вопроса.",
+  "claudeCode.askUserQuestion.timeExpiredNoAnswer": "Время истекло — на этот вопрос больше нельзя ответить.",
   "claudeCode.askUserQuestion.timeRemaining": "Оставшееся время: {{time}} · на вопросы без ответа по истечении времени будет выбран вариант 1.",
   "codeInterpreter-legacy.error": "Ошибка выполнения",
   "codeInterpreter-legacy.executing": "Выполнение...",

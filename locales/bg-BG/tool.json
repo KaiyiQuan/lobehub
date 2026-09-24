@@ -67,6 +67,7 @@
   "claudeCode.askUserQuestion.supplement.enter": "Допълнителни бележки",
   "claudeCode.askUserQuestion.supplement.placeholder": "Добавете контекст към избраните от вас отговори…",
   "claudeCode.askUserQuestion.timeExpired": "Времето изтече — използва се опция 1 за всеки въпрос.",
+  "claudeCode.askUserQuestion.timeExpiredNoAnswer": "Времето изтече — този въпрос вече не може да бъде отговорен.",
   "claudeCode.askUserQuestion.timeRemaining": "Оставащо време: {{time}} · въпросите без отговор ще се задават на опция 1 при изтичане на времето.",
   "codeInterpreter-legacy.error": "Грешка при изпълнение",
   "codeInterpreter-legacy.executing": "Изпълнение...",

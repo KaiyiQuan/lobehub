@@ -67,6 +67,7 @@
   "claudeCode.askUserQuestion.supplement.enter": "Dodatkowe uwagi",
   "claudeCode.askUserQuestion.supplement.placeholder": "Dodaj kontekst do wybranych odpowiedzi…",
   "claudeCode.askUserQuestion.timeExpired": "Czas minął — użyto opcji 1 dla każdego pytania.",
+  "claudeCode.askUserQuestion.timeExpiredNoAnswer": "Czas minął — to pytanie nie może już zostać odpowiedziane.",
   "claudeCode.askUserQuestion.timeRemaining": "Pozostały czas: {{time}} · nieodpowiedziane pytania domyślnie wybierają opcję 1 po upływie czasu.",
   "codeInterpreter-legacy.error": "Błąd Wykonania",
   "codeInterpreter-legacy.executing": "Wykonywanie...",

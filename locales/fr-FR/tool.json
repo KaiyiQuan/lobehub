@@ -67,6 +67,7 @@
   "claudeCode.askUserQuestion.supplement.enter": "Notes supplémentaires",
   "claudeCode.askUserQuestion.supplement.placeholder": "Ajoutez du contexte à vos réponses sélectionnées…",
   "claudeCode.askUserQuestion.timeExpired": "Temps écoulé — utilisation de l'option 1 pour chaque question.",
+  "claudeCode.askUserQuestion.timeExpiredNoAnswer": "Le délai est écoulé — cette question ne peut plus être répondue.",
   "claudeCode.askUserQuestion.timeRemaining": "Temps restant : {{time}} · les questions sans réponse par défaut passent à l'option 1 à l'expiration.",
   "codeInterpreter-legacy.error": "Erreur d'exécution",
   "codeInterpreter-legacy.executing": "Exécution en cours...",

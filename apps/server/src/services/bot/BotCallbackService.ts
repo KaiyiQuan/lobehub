@@ -29,9 +29,11 @@ import type {
 import {
   getBotReplyLocale,
   getStepReactionEmoji,
+  normalizeBotReactionMode,
   platformFromThreadId,
   platformRegistry,
   resolveBotProviderConfig,
+  shouldApplyReaction,
 } from './platforms';
 import { clearReactionState, getReactionState, saveReactionState } from './reactionState';
 import {
@@ -182,6 +184,7 @@ export class BotCallbackService {
     const entry = platformRegistry.getPlatform(platform);
     const canEdit = entry?.supportsMessageEdit !== false;
     const replyLocale = getBotReplyLocale(platform);
+    const reactionMode = normalizeBotReactionMode(settings.reactionMode);
 
     if (type === 'step') {
       if (canEdit && progressMessageId && settings.displayToolCalls === true) {
@@ -189,8 +192,12 @@ export class BotCallbackService {
       }
       // Swap the user-message reaction to match the current step type (tool
       // call vs. LLM reasoning). Runs regardless of `displayToolCalls` because
-      // the progress-message edit and the reaction are separate UX channels.
-      await this.swapStepReaction(body, client, platform);
+      // the progress-message edit and the reaction are separate UX channels —
+      // but only under the `full` reaction mode: every swap is a platform
+      // notification for users with message alerts on (LOBE-14110).
+      if (shouldApplyReaction(reactionMode, 'step')) {
+        await this.swapStepReaction(body, client, platform);
+      }
       // Only renew typing when more steps are expected. The final step
       // (shouldContinue=false) may arrive after the completion callback
       // via async delivery (QStash), which would restart typing after stop.
@@ -213,7 +220,9 @@ export class BotCallbackService {
         options?.deliveredChunkCount,
         options?.onChunkDelivered,
       );
-      await this.clearStepReaction(body, client, platform);
+      if (shouldApplyReaction(reactionMode, 'clear')) {
+        await this.clearStepReaction(body, client, platform);
+      }
       // Clear the active thread tracker so the thread can accept new messages.
       // In queue mode, the bridge handler's finally block skips this cleanup
       // to keep the thread marked active while the agent runs on the job queue.

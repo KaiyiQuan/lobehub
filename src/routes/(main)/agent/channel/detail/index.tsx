@@ -66,7 +66,10 @@ export interface ChannelFormValues {
 }
 
 export interface TestResult {
+  /** Raw platform / server message, shown under the hint for diagnosis. */
   errorDetail?: string;
+  /** Readable, localized explanation of what went wrong and what to check. */
+  hint?: string;
   title?: string;
   type: 'error' | 'info' | 'success';
 }
@@ -270,6 +273,7 @@ const PlatformDetail = memo<PlatformDetailProps>(
         setSaving(true);
         setSaveResult(undefined);
         setConnectResult(undefined);
+        setTestResult(undefined);
 
         const {
           applicationId: formAppId,
@@ -345,6 +349,7 @@ const PlatformDetail = memo<PlatformDetailProps>(
         setSaving(true);
         setSaveResult(undefined);
         setConnectResult(undefined);
+        setTestResult(undefined);
 
         try {
           const { applicationId, credentials } = params;
@@ -422,13 +427,31 @@ const PlatformDetail = memo<PlatformDetailProps>(
       }
 
       setTesting(true);
+      setSaveResult(undefined);
       setTestResult(undefined);
+      // The latest action's outcome is the one shown: a stale "Bot connected"
+      // banner next to a failed test reads as contradictory. Keep an
+      // in-progress queued/starting notice so the connect polling loop is
+      // not visually interrupted.
+      setConnectResult((prev) => (prev?.type === 'info' ? prev : undefined));
       try {
-        await testConnection({
+        const result = await testConnection({
           applicationId: currentConfig.applicationId,
           platform: platformDef.id,
         });
-        setTestResult({ type: 'success' });
+        if (result.valid) {
+          setTestResult({ type: 'success' });
+          return;
+        }
+        // Recognized failures carry a code with a localized guidance line;
+        // keep the platform's raw message underneath so the exact reason
+        // (e.g. the Feishu error code) is still visible.
+        const code = result.errors.find((e) => e.code)?.code;
+        setTestResult({
+          errorDetail: result.message,
+          hint: code ? t(`channel.connectionError.${code}`) : undefined,
+          type: 'error',
+        });
       } catch (e: any) {
         setTestResult({
           errorDetail: e?.message || String(e),

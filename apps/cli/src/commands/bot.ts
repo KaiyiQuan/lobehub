@@ -880,10 +880,14 @@ export function registerBotCommand(program: Command) {
       log.status(`Testing ${b.platform} credentials for ${b.applicationId}...`);
 
       try {
-        await client.agentBotProvider.testConnection.mutate({
+        const result = await client.agentBotProvider.testConnection.mutate({
           applicationId: b.applicationId,
           platform: b.platform,
         });
+        if (!result.valid) {
+          log.error(`Credential test failed: ${result.message}`);
+          process.exit(1);
+        }
         console.log(`${pc.green('✓')} Credentials are valid for ${pc.bold(b.platform)} bot`);
       } catch (err: any) {
         const message = err?.message || 'Connection test failed';

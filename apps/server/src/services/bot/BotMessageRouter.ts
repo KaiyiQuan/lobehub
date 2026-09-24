@@ -46,6 +46,7 @@ import {
   type GuestSettings,
   messageMatchesWatchKeyword,
   normalizeAllowFromEntries,
+  normalizeBotReactionMode,
   normalizeBotReplyLocale,
   type PlatformClient,
   type PlatformDefinition,
@@ -692,6 +693,7 @@ export class BotMessageRouter {
     const bridge = new AgentBridgeService(serverDB, userId, workspaceId);
     const charLimit = (info.settings?.charLimit as number) || undefined;
     const displayToolCalls = info.settings?.displayToolCalls === true;
+    const reactionMode = normalizeBotReactionMode(info.settings?.reactionMode);
     const dmSettings: DmSettings = extractDmSettings(info.settings);
     const guestSettings: GuestSettings = extractGuestSettings(info.settings);
     const groupSettings: GroupSettings = extractGroupSettings(info.settings);
@@ -1368,6 +1370,7 @@ export class BotMessageRouter {
           charLimit,
           client,
           displayToolCalls,
+          reactionMode,
           replyLocale,
         });
       } catch (error) {
@@ -1598,6 +1601,7 @@ export class BotMessageRouter {
           charLimit,
           client,
           displayToolCalls,
+          reactionMode,
           replyLocale,
         });
       } catch (error) {
@@ -1822,6 +1826,7 @@ export class BotMessageRouter {
             charLimit,
             client,
             displayToolCalls,
+            reactionMode,
             replyLocale,
           });
         } catch (error) {

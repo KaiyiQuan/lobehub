@@ -236,6 +236,78 @@ describe('AgentBridgeService', () => {
     expect(mockExecAgent.mock.calls[0][0].toolModeOverride).toBeUndefined();
   });
 
+  describe('reactionMode (LOBE-14110)', () => {
+    function createReactionClient() {
+      const replaceReaction = vi.fn().mockResolvedValue(undefined);
+      const client = createClient();
+      client.getMessenger = vi.fn().mockReturnValue({ replaceReaction, triggerTyping: vi.fn() });
+      return { client, replaceReaction };
+    }
+
+    it('applies ACK then thinking by default (minimal) without a mode in opts', async () => {
+      const service = new AgentBridgeService(FAKE_DB, USER_ID);
+      const { client, replaceReaction } = createReactionClient();
+
+      await service.handleMention(createThread(), createMessage(), {
+        agentId: 'agent-1',
+        botContext: { platformThreadId: THREAD_ID } as any,
+        client,
+      });
+
+      expect(replaceReaction.mock.calls).toEqual([
+        [MESSAGE_ID, null, '👀'],
+        [MESSAGE_ID, '👀', '🤔'],
+      ]);
+    });
+
+    it('applies the same two transitions under full mode', async () => {
+      const service = new AgentBridgeService(FAKE_DB, USER_ID);
+      const { client, replaceReaction } = createReactionClient();
+
+      await service.handleMention(createThread(), createMessage(), {
+        agentId: 'agent-1',
+        botContext: { platformThreadId: THREAD_ID } as any,
+        client,
+        reactionMode: 'full',
+      });
+
+      expect(replaceReaction.mock.calls).toEqual([
+        [MESSAGE_ID, null, '👀'],
+        [MESSAGE_ID, '👀', '🤔'],
+      ]);
+    });
+
+    it('never touches reactions under none on the mention path', async () => {
+      const service = new AgentBridgeService(FAKE_DB, USER_ID);
+      const { client, replaceReaction } = createReactionClient();
+
+      await service.handleMention(createThread(), createMessage(), {
+        agentId: 'agent-1',
+        botContext: { platformThreadId: THREAD_ID } as any,
+        client,
+        reactionMode: 'none',
+      });
+
+      expect(replaceReaction).not.toHaveBeenCalled();
+      expect(mockExecAgent).toHaveBeenCalledTimes(1);
+    });
+
+    it('never touches reactions under none on the subscribed-message path', async () => {
+      const service = new AgentBridgeService(FAKE_DB, USER_ID);
+      const { client, replaceReaction } = createReactionClient();
+
+      await service.handleSubscribedMessage(createThread({ topicId: 'topic-1' }), createMessage(), {
+        agentId: 'agent-1',
+        botContext: { platformThreadId: THREAD_ID } as any,
+        client,
+        reactionMode: 'none',
+      });
+
+      expect(replaceReaction).not.toHaveBeenCalled();
+      expect(mockExecAgent).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('current-conversation injection', () => {
     it('injects the platform + channelId the message tool needs into botPlatformContext', async () => {
       const service = new AgentBridgeService(FAKE_DB, USER_ID);

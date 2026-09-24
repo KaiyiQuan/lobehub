@@ -482,8 +482,28 @@ export interface BotPlatformRuntimeContext {
 
 // --------------- Validation ---------------
 
+/**
+ * Machine-readable reason for a credential check failure. Each value has a
+ * user-facing explanation under `channel.connectionError.<code>` in the
+ * `agent` locale namespace, shared with the runtime-status error codes.
+ */
+export type BotCredentialErrorCode =
+  | 'application_not_found'
+  | 'invalid_credentials'
+  | 'missing_credentials'
+  | 'permission_denied'
+  | 'rate_limited'
+  | 'upstream_unavailable';
+
+export interface ValidationError {
+  /** Recognized failure reason; omitted when the platform error is unclassified. */
+  code?: BotCredentialErrorCode;
+  field: string;
+  message: string;
+}
+
 export interface ValidationResult {
-  errors?: Array<{ field: string; message: string }>;
+  errors?: ValidationError[];
   valid: boolean;
 }
 

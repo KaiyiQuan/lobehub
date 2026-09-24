@@ -74,6 +74,8 @@ export const getContextWindowMessages = (
 export interface ConversationChatInputUiState {
   placeholderVariant: PlaceholderVariant;
   showSendMenu: boolean;
+  /** Show Send beside Stop so a typed follow-up can be queued by click. */
+  showSendWhileGenerating: boolean;
   showStopButton: boolean;
 }
 
@@ -83,24 +85,27 @@ export interface GetConversationChatInputUiStateParams {
    * surfaces (e.g. onboarding) that have no follow-up / pending-message design.
    */
   disableFollowUpVariant?: boolean;
+  /** Sending is blocked while loading, so no Send button appears beside Stop. */
+  disableQueue?: boolean;
   isInputEmpty: boolean;
   isInputLoading: boolean;
 }
 
 export const getConversationChatInputUiState = ({
   disableFollowUpVariant,
+  disableQueue,
   isInputEmpty,
   isInputLoading,
 }: GetConversationChatInputUiStateParams): ConversationChatInputUiState => {
   // Keep the Stop button up for the entire loading window — including when the
-  // user starts typing a follow-up. Previously this flipped to Send the moment
-  // the composer had any text, which read as "agent finished" and made queued
-  // sends look like fresh sends. Pressing Enter still enqueues; the QueueTray
-  // exposes per-item Send-now and Edit/Delete for explicit control.
+  // user starts typing a follow-up. Replacing Stop with Send read as "agent
+  // finished" and made queued sends look like fresh sends. Once the composer
+  // has content, Send appears beside Stop instead; Enter and Send both enqueue.
   const followUp = !disableFollowUpVariant && isInputLoading && isInputEmpty;
   return {
     placeholderVariant: followUp ? 'followUp' : 'default',
     showSendMenu: !isInputLoading,
+    showSendWhileGenerating: isInputLoading && !isInputEmpty && !disableQueue,
     showStopButton: isInputLoading,
   };
 };

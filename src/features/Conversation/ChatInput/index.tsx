@@ -307,11 +307,13 @@ const ChatInput = memo<ChatInputProps>(
 
     // Computed state
     const isInputEmpty = !inputMessage.trim() && fileList.length === 0 && contextList.length === 0;
-    const { placeholderVariant, showSendMenu, showStopButton } = getConversationChatInputUiState({
-      disableFollowUpVariant,
-      isInputEmpty,
-      isInputLoading,
-    });
+    const { placeholderVariant, showSendMenu, showSendWhileGenerating, showStopButton } =
+      getConversationChatInputUiState({
+        disableFollowUpVariant,
+        disableQueue,
+        isInputEmpty,
+        isInputLoading,
+      });
     // Input stays enabled during agent execution — messages are queued.
     // When disableQueue is set (e.g. onboarding), block sending while loading.
     // disableSend hard-blocks regardless of content (host surface is read-only).
@@ -420,6 +422,7 @@ const ChatInput = memo<ChatInputProps>(
       disabled,
       generating: showStopButton,
       onStop: stopGenerating,
+      showSendWhileGenerating,
       ...customSendButtonProps,
       ...(shouldUsePlainSendButton
         ? { shape: customSendButtonProps?.shape ?? 'round' }

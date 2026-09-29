@@ -22,6 +22,7 @@ import {
   EXPERTISE_TOPIC_INGESTION_PROMPT_VERSION,
 } from '@lobechat/prompts';
 import type { VerifyCheckDecisionDetail } from '@lobechat/types';
+import { RequestTrigger } from '@lobechat/types';
 import debug from 'debug';
 import { and, asc, count, desc, eq, gt, isNotNull, isNull, max, or, sql } from 'drizzle-orm';
 import pMap from 'p-map';
@@ -33,6 +34,8 @@ import { FileModel } from '@/database/models/file';
 import { VerifyEvidenceModel } from '@/database/models/verifyEvidence';
 import type { LobeChatDatabase } from '@/database/type';
 import { notShareVisitorMessage, notShareVisitorTopic } from '@/database/utils/shareVisitor';
+import { notTrashed } from '@/database/utils/softDelete';
+import { buildWorkspaceWhere } from '@/database/utils/workspace';
 import type { CompletionCallbackParams } from '@/server/services/agentSignal/policies/completionPolicy';
 import { AiGenerationService } from '@/server/services/aiGeneration';
 import { FileService } from '@/server/services/file';
@@ -278,11 +281,13 @@ export class ExpertiseIngestionService {
     const byMessageAgent = this.db
       .select({ topicId: messages.topicId })
       .from(messages)
+      .innerJoin(topics, and(eq(topics.id, messages.topicId), notTrashed(topics.isDeleted)))
       .where(
         and(
           scope,
           eq(messages.agentId, agentId),
           isNotNull(messages.topicId),
+          notTrashed(messages.isDeleted),
           notShareVisitorMessage(),
         ),
       );
@@ -291,7 +296,14 @@ export class ExpertiseIngestionService {
       .from(messages)
       .innerJoin(topics, eq(topics.id, messages.topicId))
       .where(
-        and(scope, isNull(messages.agentId), eq(topics.agentId, agentId), notShareVisitorTopic()),
+        and(
+          scope,
+          isNull(messages.agentId),
+          eq(topics.agentId, agentId),
+          notTrashed(messages.isDeleted),
+          notTrashed(topics.isDeleted),
+          notShareVisitorTopic(),
+        ),
       );
 
     return byMessageAgent.union(byTopicAgent).as('historical_topic_candidates');
@@ -315,7 +327,7 @@ export class ExpertiseIngestionService {
       })
       .from(messages)
       .innerJoin(candidates, eq(candidates.topicId, messages.topicId))
-      .where(scope)
+      .where(and(scope, notTrashed(messages.isDeleted)))
       .groupBy(messages.topicId)
       .having(
         options.cursor
@@ -425,7 +437,7 @@ export class ExpertiseIngestionService {
         schema: EXPERTISE_TOPIC_INGESTION_JSON_SCHEMA,
       },
       {
-        metadata: { trigger: 'expertise_topic_ingestion' },
+        metadata: { trigger: RequestTrigger.Expertise },
         tracing: {
           agentId: input.agentId,
           promptVersion: EXPERTISE_TOPIC_INGESTION_PROMPT_VERSION,
@@ -571,7 +583,7 @@ export class ExpertiseIngestionService {
         schema: EXPERTISE_REJECTION_INGESTION_JSON_SCHEMA,
       },
       {
-        metadata: { trigger: 'expertise_rejection_ingestion' },
+        metadata: { trigger: RequestTrigger.Expertise },
         tracing: {
           promptVersion: EXPERTISE_REJECTION_INGESTION_PROMPT_VERSION,
           scenario: TRACING_SCENARIOS.ExpertiseRejectionIngestion,
@@ -745,6 +757,18 @@ export class ExpertiseIngestionService {
   };
 
   private readTopicContext = async (topicId: string) => {
+    const [topic] = await this.db
+      .select({ id: topics.id })
+      .from(topics)
+      .where(
+        and(
+          eq(topics.id, topicId),
+          buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, topics),
+        ),
+      )
+      .limit(1);
+    if (!topic) return { hadHumanInLoop: false, serializedContext: '' };
+
     const rows = await this.db.query.messages.findMany({
       columns: { content: true, createdAt: true, role: true },
       limit: MAX_CONTEXT_MESSAGES,
@@ -755,6 +779,7 @@ export class ExpertiseIngestionService {
           : and(eq(messages.userId, this.userId), isNull(messages.workspaceId)),
         eq(messages.topicId, topicId),
         isNull(messages.threadId),
+        notTrashed(messages.isDeleted),
         // Same rule as `historicalTopicCandidates` above — exclude share-visitor messages.
         notShareVisitorMessage(),
       ),

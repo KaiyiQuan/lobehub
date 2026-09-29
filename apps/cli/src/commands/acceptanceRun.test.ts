@@ -8,12 +8,15 @@ import { Command } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getTrpcClient } from '../api/client';
+import { resolveWorkspaceId } from '../api/workspace';
+import { resolveServerUrl } from '../settings';
 import { log } from '../utils/logger';
 import { uploadLocalFile } from '../utils/uploadLocalFile';
 import { attachAcceptanceRunCommands } from './acceptanceRun';
 
 vi.mock('../api/client', () => ({ getTrpcClient: vi.fn() }));
-vi.mock('../settings', () => ({ resolveServerUrl: () => 'https://app.lobehub.com' }));
+vi.mock('../api/workspace', () => ({ resolveWorkspaceId: vi.fn() }));
+vi.mock('../settings', () => ({ resolveServerUrl: vi.fn() }));
 vi.mock('../utils/uploadLocalFile', () => ({ uploadLocalFile: vi.fn() }));
 
 describe('acceptance publication with missing evidence', () => {
@@ -21,6 +24,7 @@ describe('acceptance publication with missing evidence', () => {
     acceptance: {
       attachRun: { mutate: vi.fn() },
       ensure: { mutate: vi.fn() },
+      getBundle: { query: vi.fn() },
     },
     verify: {
       createRun: { mutate: vi.fn() },
@@ -28,6 +32,7 @@ describe('acceptance publication with missing evidence', () => {
       uploadEvidence: { mutate: vi.fn() },
       upsertReport: { mutate: vi.fn() },
     },
+    workspace: { getById: { query: vi.fn() } },
   };
   let dir: string;
   let printed: string[];
@@ -40,11 +45,13 @@ describe('acceptance publication with missing evidence', () => {
     printed = [];
     vi.spyOn(console, 'log').mockImplementation((line) => printed.push(String(line)));
     vi.spyOn(log, 'warn').mockImplementation(() => {});
+    vi.mocked(resolveServerUrl).mockReturnValue('https://app.lobehub.com');
     vi.mocked(getTrpcClient).mockResolvedValue(
       client as unknown as Awaited<ReturnType<typeof getTrpcClient>>,
     );
     vi.mocked(uploadLocalFile).mockResolvedValue({ id: 'file-1', url: 'https://files.test/1' });
     client.acceptance.ensure.mutate.mockResolvedValue({ id: 'acceptance-1' });
+    client.acceptance.getBundle.query.mockResolvedValue({});
     client.acceptance.attachRun.mutate.mockResolvedValue({ id: 'run-1', roundIndex: 2 });
     client.verify.createRun.mutate.mockResolvedValue({ id: 'run-1' });
     client.verify.ingestResult.mutate.mockImplementation(async (input) => ({
@@ -102,6 +109,11 @@ describe('acceptance publication with missing evidence', () => {
       inlined: 1,
       missingEvidence: [{ checkItemId: 'screen', types: ['screenshot'] }],
       publicationStatus: 'partial',
+      recovery: {
+        cleanupUrl: 'https://lobehub.com/acceptance',
+        reason: 'storage_quota',
+        upgradeUrl: 'https://lobehub.com/settings/plans',
+      },
       roundUrl: 'https://app.lobehub.com/acceptance/acceptance-1?r=2',
     });
     expect(result().failedEvidence[0].retryCommand).toContain('evidence upload');
@@ -184,8 +196,226 @@ describe('acceptance publication with missing evidence', () => {
     expect(printed.join('\n')).toContain('evidence upload');
     expect(printed.join('\n')).toContain('POSIX shell');
     expect(printed.join('\n')).toContain('retryArgs');
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('personal file storage quota'));
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('https://lobehub.com/acceptance'),
+    );
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('https://lobehub.com/settings/plans'),
+    );
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('permanently delete all rounds, reports, and evidence files'),
+    );
     expect(process.exitCode).toBe(1);
+  });
+
+  it('uses the configured server without credentials for recovery links', async () => {
+    vi.mocked(resolveServerUrl).mockReturnValue(
+      'https://quota-user:quota%40password@lobe.example.test:8443/base',
+    );
+    vi.mocked(uploadLocalFile).mockRejectedValue(new Error('storage_block:upgrade_required'));
+    await report(['screenshot'], ["screen's shot.png"]);
+
+    await run('ingest', dir, '--json');
+
+    expect(result().recovery).toMatchObject({
+      cleanupUrl: 'https://lobe.example.test:8443/acceptance',
+      upgradeUrl: 'https://lobe.example.test:8443/settings/plans',
+    });
+    expect(result().recovery.message).toContain('https://lobe.example.test:8443/acceptance');
+    expect(result().recovery.message).toContain('https://lobe.example.test:8443/settings/plans');
+    expect(JSON.stringify(result().recovery)).not.toMatch(
+      /quota-user|quota%40password|quota@password/,
+    );
+    expect(log.warn).toHaveBeenCalledWith(result().recovery.message);
+  });
+
+  it.each([undefined, 'Upload failed: 503 Service Unavailable'])(
+    'does not suggest storage recovery for a non-quota outcome: %s',
+    async (error) => {
+      if (error) vi.mocked(uploadLocalFile).mockRejectedValue(new Error(error));
+      await report(['screenshot'], ["screen's shot.png"]);
+
+      await run('ingest', dir, '--json');
+
+      expect(result()).not.toHaveProperty('recovery');
+      expect(result().publicationStatus).toBe(error ? 'partial' : 'complete');
+      expect(log.warn).not.toHaveBeenCalledWith(expect.stringContaining('/settings/plans'));
+      expect(client.workspace.getById.query).not.toHaveBeenCalled();
+    },
+  );
+
+  describe.each(['ingest', 'evidence', 'result'])('workspace quota via %s', (command) => {
+    const upload = async (json: boolean) => {
+      await report(['screenshot'], ["screen's shot.png"]);
+      const args =
+        command === 'ingest'
+          ? ['ingest', dir]
+          : [
+              ...(command === 'evidence'
+                ? ['evidence', 'upload', '--check', 'result-screen']
+                : ['result', 'submit', '--run', 'run-1', '--item', 'screen']),
+              '--file',
+              path.join(dir, "screen's shot.png"),
+              '--type',
+              'screenshot',
+              '--desc',
+              'The visible result',
+            ];
+      await run(...args, ...(json ? ['--json'] : []));
+    };
+
+    beforeEach(() => {
+      vi.mocked(resolveWorkspaceId).mockReturnValue('workspace-42');
+      vi.mocked(uploadLocalFile).mockRejectedValue(new Error('storage_block:upgrade_required'));
+      client.workspace.getById.query.mockResolvedValue({ id: 'workspace-42', slug: 'design-team' });
+    });
+
+    it.each([false, true])('targets the workspace resources and plan (json=%s)', async (json) => {
+      await upload(json);
+
+      expect(process.exitCode).toBe(1);
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringContaining('https://lobehub.com/design-team/resource'),
+      );
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringContaining('https://lobehub.com/design-team/settings/plans'),
+      );
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'Personal cleanup or a personal plan upgrade will not resolve this workspace quota.',
+        ),
+      );
+      expect(log.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining('https://lobehub.com/acceptance'),
+      );
+      expect(log.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining('https://lobehub.com/settings/plans'),
+      );
+      if (json)
+        expect(result().recovery).toMatchObject({
+          cleanupUrl: 'https://lobehub.com/design-team/resource',
+          upgradeUrl: 'https://lobehub.com/design-team/settings/plans',
+          workspaceId: 'workspace-42',
+          scope: 'workspace',
+          reason: 'storage_quota',
+        });
+    });
+
+    it('keeps workspace links on a credential-free self-hosted origin', async () => {
+      vi.mocked(resolveServerUrl).mockReturnValue(
+        'https://quota-user:quota%40password@lobe.example.test:8443',
+      );
+
+      await upload(true);
+
+      expect(result().recovery).toMatchObject({
+        cleanupUrl: 'https://lobe.example.test:8443/design-team/resource',
+        upgradeUrl: 'https://lobe.example.test:8443/design-team/settings/plans',
+      });
+      expect(JSON.stringify(result().recovery)).not.toMatch(/quota-user|quota%40password/);
+    });
+
+    it.each([null, { id: 'another-workspace', slug: 'other' }, new Error('Lookup unavailable')])(
+      'preserves quota recovery without personal links when workspace lookup returns %s',
+      async (workspace) => {
+        if (workspace instanceof Error) client.workspace.getById.query.mockRejectedValue(workspace);
+        else client.workspace.getById.query.mockResolvedValue(workspace);
+
+        await upload(true);
+
+        expect(process.exitCode).toBe(1);
+        expect(result().recovery).toMatchObject({
+          reason: 'storage_quota',
+          scope: 'workspace',
+          workspaceId: 'workspace-42',
+        });
+        expect(result().recovery).not.toHaveProperty('cleanupUrl');
+        expect(result().recovery).not.toHaveProperty('upgradeUrl');
+        expect(result().recovery.message).toContain('lh workspace current');
+        expect(result().recovery.message).toContain('workspace-42');
+        if (command === 'ingest') {
+          expect(result()).toMatchObject({
+            publicationStatus: 'partial',
+            acceptanceId: 'acceptance-1',
+          });
+          expect(result().failedEvidence[0].retryArgs).toContain('upload');
+        } else {
+          expect(client.verify.ingestResult.mutate).not.toHaveBeenCalled();
+        }
+      },
+    );
+  });
+
+  describe.each([
+    ['evidence', 'upload', '--check', 'result-screen'],
+    ['result', 'submit', '--run', 'run-1', '--item', 'screen'],
+  ])('atomic upload via %s %s', (...command) => {
+    it.each([false, true])(
+      'reports quota recovery (json=%s) without writing a result',
+      async (json) => {
+        vi.mocked(resolveServerUrl).mockReturnValue(
+          'https://quota-user:quota%40password@app.lobehub.com',
+        );
+        vi.mocked(uploadLocalFile).mockRejectedValue(new Error('storage_block:upgrade_required'));
+
+        await run(
+          ...command,
+          '--file',
+          path.join(dir, "screen's shot.png"),
+          '--type',
+          'screenshot',
+          '--desc',
+          'The visible result',
+          ...(json ? ['--json'] : []),
+        );
+
+        expect(process.exitCode).toBe(1);
+        expect(client.verify.uploadEvidence.mutate).not.toHaveBeenCalled();
+        expect(client.verify.ingestResult.mutate).not.toHaveBeenCalled();
+        expect(client.verify.createRun.mutate).not.toHaveBeenCalled();
+        expect(log.warn).toHaveBeenCalledWith(
+          expect.stringContaining('https://lobehub.com/acceptance'),
+        );
+        expect(log.warn).toHaveBeenCalledWith(
+          expect.stringContaining('https://lobehub.com/settings/plans'),
+        );
+        expect(JSON.stringify(vi.mocked(log.warn).mock.calls)).not.toMatch(
+          /quota-user|quota%40password|quota@password/,
+        );
+        expect(printed.join('\n')).not.toMatch(/quota-user|quota%40password|quota@password/);
+        if (json) {
+          expect(result()).toMatchObject({
+            error: 'storage_block:upgrade_required',
+            recovery: {
+              reason: 'storage_quota',
+              cleanupUrl: 'https://lobehub.com/acceptance',
+              upgradeUrl: 'https://lobehub.com/settings/plans',
+            },
+          });
+        }
+      },
+    );
+
+    it('preserves non-quota errors without suggesting an upgrade', async () => {
+      const error = new Error('Upload failed: 503 Service Unavailable');
+      vi.mocked(uploadLocalFile).mockRejectedValue(error);
+
+      await expect(
+        run(
+          ...command,
+          '--file',
+          path.join(dir, "screen's shot.png"),
+          '--type',
+          'screenshot',
+          '--desc',
+          'The visible result',
+          '--json',
+        ),
+      ).rejects.toBe(error);
+
+      expect(printed).toEqual([]);
+      expect(log.warn).not.toHaveBeenCalled();
+    });
   });
 
   it.each(['passed', 'failed'])(

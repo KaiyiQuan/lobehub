@@ -30,6 +30,7 @@
   "artifacts.svg.copySuccess": "Görsel başarıyla kopyalandı",
   "artifacts.svg.download.png": "PNG olarak indir",
   "artifacts.svg.download.svg": "SVG olarak indir",
+  "document.saveConflict": "Bu belge başka bir yerde güncellendi. En son sürüme yenileniyor.",
   "document.todos.allCompleted": "Tüm görevler tamamlandı",
   "document.todos.title": "Görevler",
   "emptyArtifactList": "Henüz eser yok. Sohbette Yetenekleri kullanın, ardından buraya geri dönün.",

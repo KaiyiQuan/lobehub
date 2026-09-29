@@ -15,6 +15,7 @@ import {
   agentSignalReviewManifest,
   agentSignalSkillManagementManifest,
 } from '@lobechat/builtin-tool-agent-signal';
+import { AttachmentsManifest } from '@lobechat/builtin-tool-attachments';
 import { AuvManifest } from '@lobechat/builtin-tool-auv';
 import { BriefManifest } from '@lobechat/builtin-tool-brief';
 import { BrowserManifest } from '@lobechat/builtin-tool-browser';
@@ -47,6 +48,7 @@ import { TaskManifest } from '@lobechat/builtin-tool-task';
 import { TopicReferenceManifest } from '@lobechat/builtin-tool-topic-reference';
 import { UserInteractionManifest } from '@lobechat/builtin-tool-user-interaction';
 import { VerifyToolManifest } from '@lobechat/builtin-tool-verify';
+import { VideoGenerationManifest } from '@lobechat/builtin-tool-video-generation';
 import { WebBrowsingManifest } from '@lobechat/builtin-tool-web-browsing';
 import { WebOnboardingManifest } from '@lobechat/builtin-tool-web-onboarding';
 import { isDesktop, RECOMMENDED_SKILLS, RecommendedSkillType } from '@lobechat/const';
@@ -62,6 +64,7 @@ export const defaultToolIds = [
   SkillStoreManifest.identifier,
   WebBrowsingManifest.identifier,
   KnowledgeBaseManifest.identifier,
+  AttachmentsManifest.identifier,
   MemoryManifest.identifier,
   LocalSystemManifest.identifier,
   BrowserManifest.identifier,
@@ -115,20 +118,22 @@ export const manualModeExcludeToolIds = [
  * (`chatConfig.enableAgentMode === false`). Each one still passes through
  * its own runtime gate (e.g. knowledge base requires `hasEnabledKnowledgeBases`,
  * memory requires the global memory setting, web-browsing requires search
- * enabled, image-generation requires an explicit pin). This list is the
+ * enabled, image/video generation require an explicit pin). This list is the
  * strict outer whitelist.
  *
  * In chat mode, both the server `createServerAgentToolsEngine` and the
  * frontend `createAgentToolsEngine` build their rules from ONLY these
  * identifiers, drop user plugins / `alwaysOnToolIds` entirely (except
- * image-generation, which is re-enabled only when pinned), and disable
+ * image/video generation, which are re-enabled only when pinned), and disable
  * `allowExplicitActivation` so the activator can't smuggle other tools in.
  */
 export const chatModeAllowedToolIds = [
+  AttachmentsManifest.identifier,
   KnowledgeBaseManifest.identifier,
   MemoryManifest.identifier,
   WebBrowsingManifest.identifier,
   ImageGenerationManifest.identifier,
+  VideoGenerationManifest.identifier,
 ];
 
 /**
@@ -167,6 +172,7 @@ export const groupSupervisorToolIds = [GroupManagementManifest.identifier];
  * `src/helpers/toolEngineering/index.ts`.
  */
 export const runtimeManagedToolIds = [
+  AttachmentsManifest.identifier,
   BrowserManifest.identifier,
   CloudSandboxManifest.identifier,
   KnowledgeBaseManifest.identifier,
@@ -226,6 +232,9 @@ export const AGENT_SHARE_ALLOWED_BUILTIN_IDENTIFIERS = new Set<string>([
   CalculatorManifest.identifier,
   WebBrowsingManifest.identifier,
   ImageGenerationManifest.identifier,
+  // Like image generation: a visitor run spends the creator's quota, so it still needs the
+  // owner's explicit share tool grant, and its charges carry the share `spendOrigin`.
+  VideoGenerationManifest.identifier,
   VerifyToolManifest.identifier,
   AcceptanceEvidenceManifest.identifier,
   LobeAgentManifest.identifier,
@@ -425,10 +434,23 @@ const builtinToolRegistry: LobeBuiltinTool[] = [
     type: 'builtin',
   },
   {
+    discoverable: false,
+    hidden: true,
+    identifier: AttachmentsManifest.identifier,
+    manifest: AttachmentsManifest,
+    type: 'builtin',
+  },
+  {
     // Opt-in image generation: chat mode no longer auto-injects it, so the
     // Tools popover must expose a pin/disable control.
     identifier: ImageGenerationManifest.identifier,
     manifest: ImageGenerationManifest,
+    type: 'builtin',
+  },
+  {
+    // Opt-in video generation: exposed in the Tools popover so users can pin it.
+    identifier: VideoGenerationManifest.identifier,
+    manifest: VideoGenerationManifest,
     type: 'builtin',
   },
   {

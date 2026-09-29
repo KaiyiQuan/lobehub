@@ -34,6 +34,20 @@ describe('DiscordGatewayClient', () => {
     });
   });
 
+  describe('shouldExpireIdleTopic', () => {
+    it('keeps the topic of a Discord guild thread regardless of idle time', () => {
+      const client = createClient();
+
+      expect(client.shouldExpireIdleTopic?.('discord:guild-1:channel-1:thread-1')).toBe(false);
+    });
+
+    it('expires idle topics in DMs', () => {
+      const client = createClient();
+
+      expect(client.shouldExpireIdleTopic?.('discord:@me:dm-channel-1')).toBe(true);
+    });
+  });
+
   describe('isSoloBotConversation', () => {
     const installFakeApi = (client: any) => {
       const listThreadMembers = vi.fn().mockResolvedValue([]);
@@ -345,7 +359,7 @@ describe('DiscordGatewayClient', () => {
       ],
     };
 
-    it('names every mention and only strips the leading self mention (LOBE-14154)', () => {
+    it('names every mention and only strips the leading self mention', () => {
       const client = createNumericClient();
       expect(client.sanitizeUserInput!('<@111> 我搞了个 <@2000> 来抢你的活', { raw } as any)).toBe(
         '@Shadow Arvin 我搞了个 @Lobo 来抢你的活',

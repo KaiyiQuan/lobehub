@@ -44,15 +44,18 @@ import LinkedGoalTray from './LinkedGoalTray';
 import OpStatusTray from './OpStatusTray';
 import QueueTray from './QueueTray';
 import { sendVoiceMessage } from './sendVoiceMessage';
+import { transcribeVoiceMessage } from './transcribeVoiceMessage';
 import {
   getContextWindowMessages,
   getConversationChatInputUiState,
+  getConversationSendButtonProps,
   toChatInputMessages,
 } from './utils';
-import GoalArmedChip from './VerifyTray/GoalArmedChip';
-import { useGoalArmStore } from './VerifyTray/goalArmStore';
-import GoalTray from './VerifyTray/GoalTray';
-import { canSendVoiceMessage, useCanSendVoiceMessage } from './voiceMessageCapability';
+import {
+  canSendVoiceMessage,
+  isVoiceMessageTranscribed,
+  useCanSendVoiceMessage,
+} from './voiceMessageCapability';
 
 /** Max recent messages to feed into auto-complete context (≈10 conversation turns) */
 const MAX_CONTEXT_MESSAGES = 25;
@@ -292,26 +295,21 @@ const ChatInput = memo<ChatInputProps>(
     const hasTodos = (selectCurrentTurnTodosFromMessages(dbMessages)?.items.length ?? 0) > 0;
 
     // Detect whether OpStatusTray will render (mirrors its own `!startTime`
-    // gate) so GoalTray — which sits flush below it — can square its top corners
+    // gate) so LinkedGoalTray — which sits flush below it — can square its top corners
     // and merge with the status strip instead of showing a seam.
     const hasOpStatus = useChatStore(
       (s) => operationSelectors.getVisibleAgentRuntimeStartTimeByContext(context)(s) !== undefined,
     );
 
-    // Pre-topic "armed goal" state (topic Goal lab). `armedAt` is only ever set
-    // by the lab-gated "+" → Goal entry, so its presence already implies the
-    // lab is on. While armed the goal chip rides the action bar and the composer
-    // placeholder prompts for the goal (the next message becomes it).
-    const goalArmedAt = useGoalArmStore((s) => (agentId ? s.armedAt[agentId] : undefined));
-    const goalArmed = !!agentId && !context.topicId && goalArmedAt !== undefined;
-
     // Computed state
     const isInputEmpty = !inputMessage.trim() && fileList.length === 0 && contextList.length === 0;
-    const { placeholderVariant, showSendMenu, showStopButton } = getConversationChatInputUiState({
-      disableFollowUpVariant,
-      isInputEmpty,
-      isInputLoading,
-    });
+    const { placeholderVariant, showSendMenu, showSendWhileGenerating, showStopButton } =
+      getConversationChatInputUiState({
+        disableFollowUpVariant,
+        disableQueue,
+        isInputEmpty,
+        isInputLoading,
+      });
     // Input stays enabled during agent execution — messages are queued.
     // When disableQueue is set (e.g. onboarding), block sending while loading.
     // disableSend hard-blocks regardless of content (host surface is read-only).
@@ -326,10 +324,10 @@ const ChatInput = memo<ChatInputProps>(
     const customDisabled = customSendButtonProps?.disabled;
     const resolveSendBlocked = useCallback(() => {
       if (disableSend) return true;
-      if (customDisabled !== undefined) return customDisabled;
 
       const fileStore = useFileStore.getState();
       if (fileChatSelectors.isUploadingFiles(fileStore)) return true;
+      if (customDisabled !== undefined) return customDisabled;
 
       const { context: liveContext, editor } = storeApi.getState();
       if (
@@ -417,10 +415,11 @@ const ChatInput = memo<ChatInputProps>(
     );
 
     const sendButtonProps: SendButtonProps = {
-      disabled,
-      generating: showStopButton,
-      onStop: stopGenerating,
-      ...customSendButtonProps,
+      ...getConversationSendButtonProps(
+        { disabled, generating: showStopButton, onStop: stopGenerating, showSendWhileGenerating },
+        customSendButtonProps,
+        isUploadingFiles,
+      ),
       ...(shouldUsePlainSendButton
         ? { shape: customSendButtonProps?.shape ?? 'round' }
         : undefined),
@@ -442,6 +441,12 @@ const ChatInput = memo<ChatInputProps>(
                 context: targetContext,
                 optimisticUserMessageId: messageId,
                 signal,
+                ...(isVoiceMessageTranscribed(targetContext)
+                  ? {
+                      transcribe: (uploaded, transcribeSignal) =>
+                        transcribeVoiceMessage(uploaded.id, transcribeSignal),
+                    }
+                  : {}),
               }),
           }),
         );
@@ -487,34 +492,23 @@ const ChatInput = memo<ChatInputProps>(
             {!disableQueue && hasQueuedMessages && <QueueTray />}
             <TodoProgress topAttached={!disableQueue && hasQueuedMessages} />
             <OpStatusTray topAttached={(!disableQueue && hasQueuedMessages) || hasTodos} />
-            <GoalTray
-              topAttached={(!disableQueue && hasQueuedMessages) || hasTodos || hasOpStatus}
-            />
             {/* Goals this conversation planned; sits last so it rides flush on the input. */}
             <LinkedGoalTray
               topAttached={(!disableQueue && hasQueuedMessages) || hasTodos || hasOpStatus}
             />
           </Flexbox>
-          {/* Append the armed-goal chip to every composer's action bar. While armed,
-              the next message becomes the goal and the placeholder explains that state. */}
           <DesktopChatInput
             actionBarStyle={actionBarStyle}
             borderRadius={12}
             compact={compact}
             controlBarSlot={controlBarSlot}
+            extraActionItems={extraActionItems}
             hidden={hasPendingInterventions}
             isConfigLoading={isConfigLoading}
             leftContent={leftContent}
             placeholderVariant={placeholderVariant}
             sendAreaPrefix={businessSendAreaPrefix}
             showControlBar={showControlBar}
-            extraActionItems={[
-              ...(extraActionItems ?? []),
-              { children: <GoalArmedChip />, key: 'goal-armed-chip' },
-            ]}
-            placeholder={
-              goalArmed ? t('acceptance.tray.goalArmedPlaceholder', { ns: 'verify' }) : undefined
-            }
           />
         </div>
       </WideScreenContainer>

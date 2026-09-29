@@ -23,6 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useAiInfraStore } from '@/store/aiInfra';
 import { useChatStore } from '@/store/chat/store';
+import { useElectronStore } from '@/store/electron';
 import { useUserStore } from '@/store/user';
 
 import { createGatewayEventHandler } from '../transports/gateway/gatewayEventHandler';
@@ -1330,6 +1331,185 @@ describe('heterogeneousAgentExecutor DB persistence', () => {
   // ────────────────────────────────────────────────────
 
   describe('final content writes (onComplete)', () => {
+    /**
+     * CC SDK mode keeps the transport open after `result`, so the terminal
+     * flush can land minutes later — but `visible_output_end` already lets the
+     * user send a follow-up, whose server response replaces the store. The
+     * final text must hit the DB before the UI is unlocked.
+     */
+    it('persists the final text before unlocking follow-ups on visible_output_end', async () => {
+      const store = createMockStore();
+      const get = vi.fn(() => store);
+
+      let resolveSendPrompt: () => void;
+      mockSendPrompt.mockReturnValue(
+        new Promise<void>((resolve) => {
+          resolveSendPrompt = resolve;
+        }),
+      );
+
+      const executorPromise = executeHeterogeneousAgent(get, defaultParams);
+      await flush();
+
+      ipc.emitStreamEvent('ipc-sess-1', {
+        data: { chunkType: 'text', content: 'final answer' },
+        type: 'stream_chunk',
+      });
+      ipc.emitStreamEvent('ipc-sess-1', { data: {}, type: 'visible_output_end' });
+      // Well inside the batcher's idle window: only an explicit flush lands the write.
+      await flush();
+
+      const contentWriteIndex = mockUpdateMessage.mock.calls.findIndex(
+        ([id, value]: any) => id === 'ast-initial' && value.content === 'final answer',
+      );
+      expect(contentWriteIndex).toBeGreaterThanOrEqual(0);
+
+      // The gateway handler (mocked here) is what flips `visibleLoadingDone`,
+      // so the forward must come after the durable write.
+      const handlerSpy = vi.mocked(createGatewayEventHandler).mock.results.at(-1)!
+        .value as ReturnType<typeof vi.fn>;
+      const unlockIndex = handlerSpy.mock.calls.findIndex(
+        ([event]: any) => event.type === 'visible_output_end',
+      );
+      expect(unlockIndex).toBeGreaterThanOrEqual(0);
+      expect(mockUpdateMessage.mock.invocationCallOrder[contentWriteIndex]).toBeLessThan(
+        handlerSpy.mock.invocationCallOrder[unlockIndex],
+      );
+
+      ipc.emitComplete('ipc-sess-1');
+      await flush();
+      resolveSendPrompt!();
+      await flush();
+      await executorPromise;
+      await flush();
+    });
+
+    /**
+     * `flush` resolves even when the write failed, and the terminal replay may
+     * be minutes away in CC SDK mode — retry once before unlocking follow-ups.
+     */
+    it('retries a failed final-text write before unlocking follow-ups on visible_output_end', async () => {
+      const store = createMockStore();
+      const get = vi.fn(() => store);
+
+      let failedOnce = false;
+      mockUpdateMessage.mockImplementation(async (_id: string, value: any) => {
+        if (value?.content === 'final answer' && !failedOnce) {
+          failedOnce = true;
+          throw new Error('transient write failure');
+        }
+      });
+
+      let resolveSendPrompt: () => void;
+      mockSendPrompt.mockReturnValue(
+        new Promise<void>((resolve) => {
+          resolveSendPrompt = resolve;
+        }),
+      );
+
+      const executorPromise = executeHeterogeneousAgent(get, defaultParams);
+      await flush();
+
+      ipc.emitStreamEvent('ipc-sess-1', {
+        data: { chunkType: 'text', content: 'final answer' },
+        type: 'stream_chunk',
+      });
+      ipc.emitStreamEvent('ipc-sess-1', { data: {}, type: 'visible_output_end' });
+      await flush();
+
+      const contentWrites = mockUpdateMessage.mock.calls
+        .map(([id, value]: any, index: number) => ({ id, index, value }))
+        .filter(({ id, value }) => id === 'ast-initial' && value.content === 'final answer');
+      expect(contentWrites).toHaveLength(2);
+
+      const handlerSpy = vi.mocked(createGatewayEventHandler).mock.results.at(-1)!
+        .value as ReturnType<typeof vi.fn>;
+      const unlockIndex = handlerSpy.mock.calls.findIndex(
+        ([event]: any) => event.type === 'visible_output_end',
+      );
+      expect(unlockIndex).toBeGreaterThanOrEqual(0);
+      expect(mockUpdateMessage.mock.invocationCallOrder[contentWrites[1].index]).toBeLessThan(
+        handlerSpy.mock.invocationCallOrder[unlockIndex],
+      );
+
+      ipc.emitComplete('ipc-sess-1');
+      await flush();
+      resolveSendPrompt!();
+      await flush();
+      await executorPromise;
+      await flush();
+    });
+
+    /**
+     * The final step's assistant row can fail to create in the same batch as
+     * its content patch. Patching before re-creating matches zero rows yet
+     * reports success, so creates must be replayed first.
+     */
+    it('replays a failed step create before its final-text patch on visible_output_end', async () => {
+      const store = createMockStore();
+      const get = vi.fn(() => store);
+
+      // Minimal table: an update against a missing row is a silent no-op, like the DB.
+      const rows = new Map<string, Record<string, any>>([['ast-initial', {}]]);
+      mockCreateMessage.mockImplementation(async (params: any) => {
+        rows.set(params.id, { ...params });
+        return { id: params.id };
+      });
+      mockUpdateMessage.mockImplementation(async (id: string, value: any) => {
+        if (rows.has(id)) rows.set(id, { ...rows.get(id), ...value });
+      });
+      const defaultBatchMutate = mockBatchMutate.getMockImplementation()!;
+      let failedOnce = false;
+      mockBatchMutate.mockImplementation(async (operations: any[]) => {
+        const createsStepAssistant = operations.some(
+          (operation) =>
+            operation.type === 'createMessage' &&
+            operation.message?.role === 'assistant' &&
+            operation.message?.id !== 'ast-initial',
+        );
+        if (createsStepAssistant && !failedOnce) {
+          failedOnce = true;
+          throw new Error('transient batch failure');
+        }
+        return defaultBatchMutate(operations);
+      });
+
+      let resolveSendPrompt: () => void;
+      mockSendPrompt.mockReturnValue(
+        new Promise<void>((resolve) => {
+          resolveSendPrompt = resolve;
+        }),
+      );
+
+      const executorPromise = executeHeterogeneousAgent(get, defaultParams);
+      await flush();
+
+      ipc.emitRawLine('ipc-sess-1', ccInit());
+      ipc.emitRawLine('ipc-sess-1', ccToolUse('msg_1', 'toolu_1', 'Bash', { command: 'ls' }));
+      ipc.emitRawLine('ipc-sess-1', ccToolResult('toolu_1', 'ok'));
+      ipc.emitRawLine('ipc-sess-1', ccText('msg_2', 'final answer'));
+      ipc.emitStreamEvent('ipc-sess-1', { data: {}, type: 'visible_output_end' });
+      await flush();
+
+      expect(failedOnce).toBe(true);
+      const handlerSpy = vi.mocked(createGatewayEventHandler).mock.results.at(-1)!
+        .value as ReturnType<typeof vi.fn>;
+      expect(
+        handlerSpy.mock.calls.some(([event]: any) => event.type === 'visible_output_end'),
+      ).toBe(true);
+      const stepAssistant = [...rows.entries()].find(
+        ([id, row]) => id !== 'ast-initial' && row.role === 'assistant',
+      );
+      expect(stepAssistant?.[1].content).toBe('final answer');
+
+      ipc.emitComplete('ipc-sess-1');
+      await flush();
+      resolveSendPrompt!();
+      await flush();
+      await executorPromise;
+      await flush();
+    });
+
     it('should write accumulated content + model + provider to the final assistant message', async () => {
       await runWithEvents([
         ccInit(),
@@ -2689,6 +2869,33 @@ describe('heterogeneousAgentExecutor DB persistence', () => {
         workingDirectory: '/Users/me/repo',
         workingDirectoryConfig: { path: '/Users/me/repo' },
       });
+    });
+
+    // The session now lives on this machine, so the topic is pinned here —
+    // otherwise a legacy unbound topic follows whatever the agent default
+    // becomes and its next turn cannot resume.
+    it('pins the topic to this machine when it persists the session id', async () => {
+      useElectronStore.setState({ gatewayDeviceInfo: { deviceId: 'this-desktop' } as any });
+      const store = createMockStore({
+        topicDataMap: { 'agent-1__main': { items: [{ id: 'topic-1', metadata: {} }] } },
+      });
+      store.updateTopicMetadata = vi.fn(async () => {});
+      const get = vi.fn(() => store);
+      mockSendPrompt.mockImplementation(() => new Promise<void>(() => {}));
+
+      void executeHeterogeneousAgent(get, { ...defaultParams, workingDirectory: '/repo' });
+      await flush();
+      ipc.emitRawLine('ipc-sess-1', ccInit('cc-session-here'));
+      await flush();
+
+      expect(store.updateTopicMetadata).toHaveBeenCalledWith(
+        'topic-1',
+        expect.objectContaining({
+          boundDeviceId: 'this-desktop',
+          heteroSessionId: 'cc-session-here',
+        }),
+      );
+      useElectronStore.setState({ gatewayDeviceInfo: undefined });
     });
 
     it('persists a newly reported session id even when sendPrompt exits non-zero', async () => {

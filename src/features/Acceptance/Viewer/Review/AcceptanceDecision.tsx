@@ -25,6 +25,7 @@ import { canReviewAcceptance } from '../visibility';
 import DecisionBar from './DecisionBar';
 import FeedbackDrawer, { type FeedbackListEntry } from './FeedbackDrawer';
 import { openAcceptModal, openGroupFeedbackModal, openRejectModal } from './modals';
+import { rejectCopyOnly } from './rejectCopyOnly';
 
 interface AcceptanceDecisionProps {
   onDraftToComposer?: (text: string) => boolean;
@@ -233,8 +234,26 @@ const AcceptanceDecision = ({ onDraftToComposer }: AcceptanceDecisionProps) => {
         }}
         onRejectComment={() =>
           openRejectModal({
-            onConfirm: (comment) =>
-              runAction(async () => {
+            // `origin` is only visible to the record owner, so this is the
+            // viewer's promise, not the server's gate — the copy path below
+            // opts out of dispatch explicitly.
+            dispatchAvailable: Boolean(data.origin?.topic),
+            onConfirm: async (comment) => {
+              if (!data.origin?.topic) {
+                const rejected = await runAction(() =>
+                  rejectCopyOnly({
+                    acceptanceId: acceptance.id,
+                    comment,
+                    copy: copyToClipboard,
+                    reject: (options) =>
+                      verifyService.rejectDelivery(acceptance.id, options.comment, options),
+                  }),
+                );
+                if (rejected)
+                  toast.success({ placement: 'top', title: t('acceptance.bar.copied') });
+                return rejected;
+              }
+              return runAction(async () => {
                 // The server sends the delivery back to its authoring agent when
                 // the rounds name one — say so, since the reject itself is quiet.
                 const { repairDispatch } = await verifyService.rejectDelivery(
@@ -246,7 +265,8 @@ const AcceptanceDecision = ({ onDraftToComposer }: AcceptanceDecisionProps) => {
                 } else if (repairDispatch.reason === 'failed') {
                   toast.error(repairDispatch.error ?? t('acceptance.actionError'));
                 }
-              }),
+              });
+            },
           })
         }
         onRerun={async () => {

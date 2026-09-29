@@ -440,6 +440,14 @@ export interface PlatformClient {
   sanitizeUserInput?: (text: string, message?: unknown) => string;
 
   /**
+   * Whether a subscribed thread's topic expires after the idle threshold
+   * (4h), so the next message starts a fresh topic. Default: true.
+   * Discord: returns false for guild threads — a thread is already a bounded
+   * conversation, so a late reply must continue the same topic.
+   */
+  shouldExpireIdleTopic?: (threadId: string) => boolean;
+
+  /**
    * Whether the bot should subscribe to a thread. Default: true.
    * Discord: returns false for top-level channels (not threads).
    */
@@ -482,8 +490,28 @@ export interface BotPlatformRuntimeContext {
 
 // --------------- Validation ---------------
 
+/**
+ * Machine-readable reason for a credential check failure. Each value has a
+ * user-facing explanation under `channel.connectionError.<code>` in the
+ * `agent` locale namespace, shared with the runtime-status error codes.
+ */
+export type BotCredentialErrorCode =
+  | 'application_not_found'
+  | 'invalid_credentials'
+  | 'missing_credentials'
+  | 'permission_denied'
+  | 'rate_limited'
+  | 'upstream_unavailable';
+
+export interface ValidationError {
+  /** Recognized failure reason; omitted when the platform error is unclassified. */
+  code?: BotCredentialErrorCode;
+  field: string;
+  message: string;
+}
+
 export interface ValidationResult {
-  errors?: Array<{ field: string; message: string }>;
+  errors?: ValidationError[];
   valid: boolean;
 }
 

@@ -51,6 +51,21 @@ export const GOAL_COORDINATOR_ACTOR_ID = 'goal-coordinator';
 export const GOAL_ACCEPTANCE_TASK_TITLE = 'Complete full Goal acceptance';
 
 /**
+ * Fixed title of the decision node the coordinator opens when decomposition
+ * finds a question only the user can answer. Stored in English as data and
+ * matched by clients for localized copy, the same way as the acceptance title.
+ */
+export const GOAL_CLARIFICATION_TITLE = 'Clarify the goal';
+
+/** Option ids every clarification decision carries besides the planner's own choices. */
+export const GOAL_CLARIFICATION_OPTION = {
+  /** Answer in the free-text note; the note is the answer. */
+  answer: 'answer',
+  /** Proceed on the assumption the planner stated for this question. */
+  assume: 'assume',
+} as const;
+
+/**
  * Task error strings the Goal coordinator matches on to route a paused Task.
  *
  * These are a contract between whoever pauses a Task and the coordinator that
@@ -59,6 +74,13 @@ export const GOAL_ACCEPTANCE_TASK_TITLE = 'Complete full Goal acceptance';
  * stops a long-horizon goal until a person clicks retry.
  */
 export const LEASE_EXPIRED_ERROR = 'Goal Task operation lease expired.';
+/**
+ * Prefix of the error the runtime writes when the gateway's inactivity watchdog
+ * abandons a run whose worker went silent (a device that slept or restarted, a
+ * CLI that died). The run is lost exactly the way an expired lease is, so the
+ * coordinator recovers it the same way instead of asking a person.
+ */
+export const ABANDONED_OPERATION_ERROR_PREFIX = 'Operation abandoned:';
 /** The verifier ran and judged the delivery short of the criteria. */
 export const VERIFICATION_FAILED_ERROR = 'Delivery did not pass verification.';
 /** The verifier itself could not run, so the delivery was never evaluated. */

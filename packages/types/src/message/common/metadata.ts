@@ -97,6 +97,10 @@ export interface ModelTokensUsage {
 
   // Output tokens breakdown
   outputTextTokens?: number;
+  /**
+   * Generated video tokens, billed through the `videoGeneration` pricing unit.
+   */
+  outputVideoTokens?: number;
   rejectedPredictionTokens?: number;
 
   // Total tokens
@@ -127,6 +131,7 @@ export const ModelUsageSchema = z.object({
   outputImageTokens: z.number().optional(),
   outputAudioTokens: z.number().optional(),
   outputReasoningTokens: z.number().optional(),
+  outputVideoTokens: z.number().optional(),
 
   // Prediction tokens
   acceptedPredictionTokens: z.number().optional(),
@@ -139,6 +144,9 @@ export const ModelUsageSchema = z.object({
 
   // Cost
   cost: z.number().optional(),
+
+  // Provider-native subscription credits (e.g. Qoder), separate from USD cost
+  credits: z.number().optional(),
 });
 
 export const ModelPerformanceSchema = z.object({
@@ -302,6 +310,12 @@ export interface ModelUsage extends ModelTokensUsage {
    * dollar
    */
   cost?: number;
+  /**
+   * Provider-native subscription credits consumed (e.g. Qoder), for runs whose
+   * CLI reports credits instead of token counts. Not USD — separate from
+   * `cost` so spend math never mixes units.
+   */
+  credits?: number;
 }
 
 export interface ModelPerformance {

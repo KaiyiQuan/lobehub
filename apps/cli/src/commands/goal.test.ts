@@ -1,6 +1,8 @@
 import { Command } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type * as FormatModule from '../utils/format';
+import { confirm } from '../utils/format';
 import { log } from '../utils/logger';
 import { registerGoalCommand } from './goal';
 
@@ -8,9 +10,11 @@ const { mockClient } = vi.hoisted(() => ({
   mockClient: {
     goal: {
       create: { mutate: vi.fn() },
+      delete: { mutate: vi.fn() },
       submitPlan: { mutate: vi.fn() },
       submitOperationPlan: { mutate: vi.fn() },
       graph: { query: vi.fn() },
+      setBudget: { mutate: vi.fn() },
       supervision: { query: vi.fn() },
       tick: { mutate: vi.fn() },
     },
@@ -19,6 +23,11 @@ const { mockClient } = vi.hoisted(() => ({
 
 vi.mock('node:fs/promises', () => ({
   readFile: async () => JSON.stringify({ action: 'verify', reason: 'Ready' }),
+}));
+
+vi.mock('../utils/format', async (importOriginal) => ({
+  ...(await importOriginal<typeof FormatModule>()),
+  confirm: vi.fn(),
 }));
 
 vi.mock('../api/client', () => ({ getTrpcClient: vi.fn().mockResolvedValue(mockClient) }));
@@ -487,5 +496,72 @@ describe('goal supervision command', () => {
     expect(mockClient.goal.supervision.query).toHaveBeenCalledWith({ id: 'goal-1' });
     expect(JSON.parse(String(vi.mocked(console.log).mock.calls.at(-1)?.[0]))).toEqual(data);
     expect(mockClient.goal.tick.mutate).not.toHaveBeenCalled();
+  });
+});
+
+describe('goal set-budget command', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(log, 'info').mockImplementation(() => {});
+  });
+
+  it('edits the limits a goal was created with, so it can continue instead of being copied', async () => {
+    mockClient.goal.setBudget.mutate.mockResolvedValue({ message: 'Goal budget updated' });
+
+    await createProgram().parseAsync([
+      'node',
+      'test',
+      'goal',
+      'set-budget',
+      'goal-1',
+      '--max-manager-turns',
+      '60',
+      '--max-concurrent-tasks',
+      '1',
+      '--max-attempts-per-task',
+      '5',
+      '--max-steps-per-run',
+      'none',
+    ]);
+
+    expect(mockClient.goal.setBudget.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'goal-1',
+        maxAttemptsPerTask: 5,
+        maxConcurrentTasks: 1,
+        maxManagerTurns: 60,
+        maxStepsPerRun: null,
+      }),
+    );
+  });
+});
+
+describe('goal delete', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(log, 'info').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('deletes the goal without prompting when --yes is passed', async () => {
+    mockClient.goal.delete.mutate.mockResolvedValue({ message: 'Goal deleted', success: true });
+
+    await createProgram().parseAsync(['node', 'test', 'goal', 'delete', 'goal-1', '--yes']);
+
+    expect(mockClient.goal.delete.mutate).toHaveBeenCalledWith({ id: 'goal-1' });
+    expect(log.info).toHaveBeenCalledWith('Goal deleted');
+  });
+
+  it('keeps the goal when the confirmation is declined', async () => {
+    vi.mocked(confirm).mockResolvedValue(false);
+
+    await createProgram().parseAsync(['node', 'test', 'goal', 'delete', 'goal-1']);
+
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(mockClient.goal.delete.mutate).not.toHaveBeenCalled();
   });
 });

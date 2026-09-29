@@ -6,16 +6,38 @@ This is Phase 0: the rule set is a private workspace package (`@lobechat/alint`)
 
 ## Rules
 
-| Rule                          | Scope                                  | Source of the rule                              |
-| ----------------------------- | -------------------------------------- | ----------------------------------------------- |
-| `pmap-over-promise-all`       | `apps/server/src`, `packages/database` | fan-out over a runtime-sized list needs `pMap`  |
-| `no-dynamic-import-in-server` | same                                   | backend code uses static top-level imports      |
-| `no-effect-fetching`          | `src/**/*.tsx`                         | `data-fetching-architecture` skill              |
-| `no-mode-flags`               | `src/**/*.tsx`                         | `compose-atoms` skill                           |
-| `no-transactions-in-models`   | `packages/database/src/models`         | cross-table write transactions use repositories |
-| `test-the-exit-not-the-entry` | Vitest files                           | tests assert outcomes, not only that a mock ran |
+| Rule                          | Severity | Scope                                                         | Source of the rule                              |
+| ----------------------------- | -------- | ------------------------------------------------------------- | ----------------------------------------------- |
+| `pmap-over-promise-all`       | error    | `apps/server/src`, `packages/database`                        | fan-out over a runtime-sized list needs `pMap`  |
+| `no-transactions-in-models`   | error    | `packages/database/src/models`                                | cross-table write transactions use repositories |
+| `no-effect-fetching`          | error    | `src/**/*.tsx`                                                | `data-fetching-architecture` skill              |
+| `no-dynamic-import-in-server` | warn     | `apps/server/src`, `packages/database`                        | backend code uses static top-level imports      |
+| `no-mode-flags`               | warn     | `src/**/*.tsx`                                                | `compose-atoms` skill                           |
+| `no-node-in-browser`          | error    | browser code in `src/` (not `app/`, `libs/`), package `*.tsx` | nothing Node-only where the SPA runs it         |
+
+Package-level rules, kept next to the package they describe:
+
+| Rule                               | Severity | Scope                                                                        | Lives in                                    |
+| ---------------------------------- | -------- | ---------------------------------------------------------------------------- | ------------------------------------------- |
+| `hetero/agent-layering`            | error    | the browser-reachable layer of `heterogeneous-agents` and its spawn pipeline | `packages/heterogeneous-agents/alint/rules` |
+| `hetero/host-capability-placement` | warn     | files owned by the browser entries of `heterogeneous-agents` (not barrels)   | `packages/heterogeneous-agents/alint/rules` |
+
+`hetero/host-capability-placement` encodes two review rejections: code that only one Node host uses (the quota sampler, `lh hetero exec`, the desktop main process) moves behind a Node-only entry even when it is pure, and it is never made browser-portable to stay where it is. It reads one file, so it cannot see who imports a symbol; it reports only a host the file names itself, and misses host-only code whose docs do not say so.
+
+`error` is reserved for rules measured at zero false positives on real PRs; an error turns the ALint check red. A rule starts at `warn` and is promoted only after its findings have been read on real PRs. A rule whose findings are mostly true but not worth acting on per PR does not belong here: `test-the-exit-not-the-entry` was removed after five days because it produced 92% of all findings and drowned out the rest.
 
 Scopes are declared as `[[config.group]]` entries in the root `alint.config.toml`. Never scope a rule with `includeFiles` inside `rule.alint.toml`: it only filters reports, so every file still runs (double the jobs), and it marks the rule uncacheable.
+
+## Where a rule lives
+
+Rules come in two layers, and each layer is registered as its own plugin in `alint.config.toml`:
+
+- **Repo-wide rules** live in `packages/alint/rules` under the `lobehub/` prefix. They state something true of a kind of code wherever it is, for example "browser code imports nothing Node-only" (`no-node-in-browser`).
+- **Package-level rules** live next to the package they describe, in `packages/<pkg>/alint/rules` with their fixtures in `packages/<pkg>/alint/fixtures`, under a prefix of their own (`hetero/` for `heterogeneous-agents`). They encode that package's architecture, for example which of its layers the web app reaches (`agent-layering`), and are only ever scoped to that package.
+
+A per-file rule cannot see an import graph. When a package's boundary matters, pair its package-level rule with a deterministic test of the graph: `heterogeneous-agents` lists its browser entries in `browser-entries.json`; `src/runtimeBoundary.test.ts` walks everything those entries reach and fails on Node built-ins, Node globals such as `Buffer`, or files owned by a Node-only entry, and the root ESLint config reads the same list to reject value imports of any other entry from `src/`.
+
+To add a package-level rule: register the directory as a plugin in the rule's `[[config.group]]`, add a fixture group for it, and add its fixtures directory with the plugin prefix to `FIXTURE_ROOTS` in `fixtures.test.ts`. CI already keys the cache on `packages/*/alint/rules/**` and runs calibration when `packages/*/alint/**` changes.
 
 ## Setup and run
 
@@ -31,14 +53,16 @@ bun run alint src/features/Foo # any files or directories
 
 Defaults are DeepSeek `deepseek-flash` at `https://api.deepseek.com/v1`; override with `ALINT_PROVIDER_ENDPOINT` and `ALINT_MODEL`. Any OpenAI-compatible endpoint with tool calling works. `thinking` is disabled on the model because alint forces a tool call for structured output and DeepSeek V4 rejects that while reasoning is on.
 
-Findings are warnings. Treat them like a reviewer's comment: fix, or explain in the PR why the rule's carve-out applies.
+Treat findings like a reviewer's comment: fix them, or explain in the PR why the rule's carve-out applies. Locally, `bun run check --alint` fails on `error` findings like any other lint error.
 
 ## CI
 
-The `alint ·` steps at the end of the "ALint & Test Desktop App" job in `.github/workflows/test.yml` run on every push and pull request, on the change's diff only, and never fail the check (they reuse that job's root install instead of paying for a runner of their own):
+The `alint ·` steps at the end of the "ALint & Test Desktop App" job in `.github/workflows/test.yml` run on every push and pull request, on the change's diff only (they reuse that job's root install instead of paying for a runner of their own). The desktop job itself never fails because of alint:
 
 - `alint --dirty` lints the working tree against `HEAD` and keeps only findings on changed lines. The steps fetch the merge base (against the PR base, or `canary` on a push) and run `git reset --mixed <merge-base>`, which turns the whole change into dirty changes, so the scope is exactly its diff and nothing older is reported. On a push to `canary` itself the diff is empty and nothing runs.
-- Findings become inline warning annotations (`packages/alint/annotate.ts`) plus a table in the job summary.
+- `packages/alint/report.ts` publishes the result as a separate **ALint** check run on the head commit: red when any `error` finding exists, neutral with only warnings, green when clean. Findings are attached to it as line annotations. The check is not a required status, so it does not block merging, but a red check reaches whoever watches CI, including agents woken by CI failures.
+- The same table goes into one summary comment on the open PR for the branch, rewritten in place on every push. It is created only once there is something to report; when a later push is clean the comment flips to a green verdict instead of disappearing.
+- Findings on the calibration fixtures are dropped from the check and the comment; the fixture suite covers them.
 - The provider key comes from the `DEEPSEEK_API_KEY` repository secret. Fork PRs cannot read it, so the steps are skipped.
 - When `alint.config.toml` or anything under `packages/alint` changed, the fixture suite runs too, so a rule edit is calibrated before it lands.
 - `.alintcache` is restored from the last run with the same rule set, keyed by the rule and config files.
@@ -51,12 +75,12 @@ The `alint ·` steps at the end of the "ALint & Test Desktop App" job in `.githu
 | same, warm cache                      | 0    | 2 s  | 0          |
 | one file changed                      | 1    | 3 s  | 873        |
 
-About 14 input tokens per source line per rule. Two cold runs over the same files differed by one finding; a finding can appear or vanish between runs, which is why fixtures exist and why the severity stays at `warn`.
+About 14 input tokens per source line per rule. Two cold runs over the same files differed by one finding; a finding can appear or vanish between runs, which is why fixtures exist and why only rules measured at zero false positives are promoted to `error`.
 
 ## Adding a rule
 
 1. Create `rules/<name>/rule.alint.toml` with `name`, `builtInAgent = "basic-structured"`, and an `instruction`. Write the rule as the reviewer would: what to report, which line to anchor on, what the message and suggestion must contain, and an explicit "do not report" list. The carve-outs are where the false positives live.
 2. Add a `[[config.group]]` for its scope in `alint.config.toml`, and a fixture group `packages/alint/fixtures/<name>/**`.
 3. Add fixtures under `fixtures/<name>/`: at least one `bad-*` file with a standalone `// alint-expect` comment on the line above the one the finding must anchor to, and one `good-*` file per carve-out. Keep them short and realistic.
-4. Run `bun run alint plugin install`, then `cd packages/alint && bunx vitest run fixtures.test.ts` with a provider set up. The suite skips itself when there is no setup.
+4. Run `bun run alint plugin install`, then `cd packages/alint && bunx vitest run fixtures.test.ts` with a provider set up. The suite skips itself when there is no setup. Delete `.alintcache` after every rule edit while calibrating: the local cache is keyed by file content, so an edited rule otherwise replays the previous rule's findings.
 5. Before enabling the rule on a scope, run it over a few dozen real files and read every finding.

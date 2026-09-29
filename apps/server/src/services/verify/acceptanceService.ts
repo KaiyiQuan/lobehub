@@ -694,7 +694,14 @@ export class AcceptanceService {
     // Only the newest round counts — `listByAcceptance` is ascending, and an
     // older draft the chain has moved past is an abandoned ledger position.
     const latest = (await this.runModel.listByAcceptance(acceptanceId)).at(-1);
-    const draft = latest && isDraftVerifyRun(latest) ? latest : undefined;
+    // A run that already executed cannot fold (`foldIntoRound` refuses any source
+    // with results): its verdicts belong to its own round. It is appended after
+    // the draft instead — the path a verification driven by the CLI takes, since
+    // it writes its results before the Task drive binds the round.
+    const draft =
+      latest && isDraftVerifyRun(latest) && (await this.resultModel.listByRun(runId)).length === 0
+        ? latest
+        : undefined;
     if (draft) {
       const folded = await this.runModel.foldIntoRound(runId, draft.id);
       await this.recomputeStatus(acceptanceId);
@@ -1407,20 +1414,26 @@ export class AcceptanceService {
     const origin = [...runs].reverse().find((run) => run.metadata?.origin)?.metadata?.origin;
     if (!origin?.agentId && !origin?.topicId) return null;
 
-    const [agent, topic] = await Promise.all([
-      origin.agentId
+    const topicRowPromise = origin.topicId
+      ? new TopicModel(this.db, this.userId, this.workspaceId)
+          .findById(origin.topicId)
+          .catch(() => null)
+      : Promise.resolve(null);
+    // Dispatched runs (task / goal / device) record only the topic — the
+    // connector strips the ambient agent id — so the topic's own agent stands in.
+    // A recorded agent does not wait on the topic read.
+    const agentPromise = (
+      origin.agentId ? Promise.resolve(origin.agentId) : topicRowPromise.then((row) => row?.agentId)
+    ).then((agentId) =>
+      agentId
         ? new AgentModel(this.db, this.userId, this.workspaceId)
-            .getAgentAvatarsByIds([origin.agentId])
+            .getAgentAvatarsByIds([agentId])
             .then((rows) => rows[0] ?? null)
             .catch(() => null)
         : null,
-      origin.topicId
-        ? new TopicModel(this.db, this.userId, this.workspaceId)
-            .findById(origin.topicId)
-            .then((row) => (row ? { id: row.id, title: row.title ?? null } : null))
-            .catch(() => null)
-        : null,
-    ]);
+    );
+    const [topicRow, agent] = await Promise.all([topicRowPromise, agentPromise]);
+    const topic = topicRow ? { id: topicRow.id, title: topicRow.title ?? null } : null;
     if (!agent && !topic) return null;
     return { agent, topic };
   };

@@ -30,6 +30,7 @@
   "artifacts.svg.copySuccess": "Imagem copiada com sucesso",
   "artifacts.svg.download.png": "Baixar como PNG",
   "artifacts.svg.download.svg": "Baixar como SVG",
+  "document.saveConflict": "Este documento foi atualizado em outro lugar. Atualizando para a versão mais recente.",
   "document.todos.allCompleted": "Todas as tarefas concluídas",
   "document.todos.title": "Tarefas",
   "emptyArtifactList": "Nenhum artefato ainda. Use habilidades na conversa e depois volte aqui.",

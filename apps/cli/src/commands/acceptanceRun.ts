@@ -15,15 +15,19 @@ import { confirm, outputJson, printTable, timeAgo, truncate } from '../utils/for
 import { log } from '../utils/logger';
 import type { LinkResult } from '../utils/skillWiring';
 import { linkHarnessSkills } from '../utils/skillWiring';
-import { uploadLocalFile } from '../utils/uploadLocalFile';
 import type { FailedReportEvidence } from './acceptanceEvidence';
-import { uploadReportEvidence } from './acceptanceEvidence';
+import {
+  storageQuotaRecovery,
+  uploadAcceptanceFile,
+  uploadReportEvidence,
+} from './acceptanceEvidence';
 import {
   type Decision,
   DECISIONS,
   deriveReportVerdict,
   evidenceDescriptionForFile,
   type EvidenceType,
+  findIdenticalLatestRound,
   genericContextFromResult,
   inlineTextEvidenceForFile,
   interactionCostFromReportDir,
@@ -34,6 +38,7 @@ import {
   printResults,
   pullRequestFromBranch,
   pullRequestFromResult,
+  reuseSourceCriteria,
   scenarioFromResult,
   screenProgrammaticTestChecks,
   subjectFromEnv,
@@ -368,7 +373,8 @@ async function submitAction(options: SubmitOptions): Promise<void> {
   if (options.file) {
     inlineContent = inlineTextEvidenceForFile(options.file, options.type!);
     if (inlineContent === undefined) {
-      const uploaded = await uploadLocalFile(client, options.file);
+      const uploaded = await uploadAcceptanceFile(client, options.file, options.json);
+      if (!uploaded) return;
       fileId = uploaded.id;
     }
   }
@@ -445,7 +451,8 @@ async function evidenceUploadAction(options: EvidenceUploadOptions): Promise<voi
   if (options.file) {
     inlineContent = inlineTextEvidenceForFile(options.file, options.type);
     if (inlineContent === undefined) {
-      const uploaded = await uploadLocalFile(client, options.file);
+      const uploaded = await uploadAcceptanceFile(client, options.file, options.json);
+      if (!uploaded) return;
       fileId = uploaded.id;
     }
   }
@@ -715,10 +722,20 @@ async function ingestReportAction(reportDir: string, options: IngestReportOption
   }
   const requirement = options.requirement ?? subject?.requirement;
 
+  // The overall conclusion, rendered at the top of the report page. Read up
+  // front so the duplicate check below compares what would land.
+  const conclusion =
+    typeof summary.conclusion === 'string'
+      ? summary.conclusion
+      : typeof summary.note === 'string'
+        ? summary.note
+        : undefined;
+
   const client = await getTrpcClient();
   let acceptance;
+  let bundle;
   if (requestedAcceptanceId) {
-    const bundle = await client.acceptance.getBundle.query({ id: requestedAcceptanceId });
+    bundle = await client.acceptance.getBundle.query({ id: requestedAcceptanceId });
     acceptance = bundle.acceptance;
     // ID-based reads can cross scopes, but creating a run uses the CLI's scope.
     // Reject before any writes instead of leaving an unattachable run behind.
@@ -744,14 +761,6 @@ async function ingestReportAction(reportDir: string, options: IngestReportOption
         );
       }
     }
-    plan = plan?.map((item) => ({
-      ...item,
-      sourceCriterionId:
-        item.sourceCriterionId ??
-        bundle.checks?.find((check) => check.id === item.id || check.planItem?.id === item.id)
-          ?.planItem?.sourceCriterionId ??
-        undefined,
-    }));
     subject = {
       ref: {
         subjectId: acceptance.subjectId,
@@ -767,6 +776,24 @@ async function ingestReportAction(reportDir: string, options: IngestReportOption
         ? { title: title || goal }
         : {}),
     });
+    // A subject's acceptance may already hold rounds; this one has to line up
+    // with them exactly as an explicit `--acceptance` round does.
+    bundle = await client.acceptance.getBundle.query({ id: acceptance.id });
+  }
+  plan = reuseSourceCriteria(plan, bundle?.checks);
+
+  const identicalRound = findIdenticalLatestRound(bundle?.rounds, {
+    plan,
+    report: { content, summary: conclusion },
+  });
+  if (identicalRound) {
+    log.error(
+      `This report is identical to round ${identicalRound.roundIndex ?? '?'} (${identicalRound.id}) — nothing new to publish.`,
+    );
+    log.error(
+      `  To replace that round, delete it first: lh acceptance run delete ${identicalRound.id}`,
+    );
+    process.exit(1);
   }
   // The in-app conversation that ran this harness, if any (env-supplied).
   // Strictly the authoring conversation. `--operation` names the Agent Run
@@ -887,14 +914,8 @@ async function ingestReportAction(reportDir: string, options: IngestReportOption
     log.warn(`${item.id}: not executed; required evidence not published: ${types.join(', ')}.`);
   }
 
-  // 3. Write the report. `summary` is the overall conclusion (rendered at
-  //    the top of the report page); `content` is the full markdown detail.
-  const conclusion =
-    typeof summary.conclusion === 'string'
-      ? summary.conclusion
-      : typeof summary.note === 'string'
-        ? summary.note
-        : undefined;
+  // 3. Write the report. `summary` is the overall conclusion (read above);
+  //    `content` is the full markdown detail.
   // A 0-100 quality score lands on overallConfidence (0-1); the report page
   // surfaces it as the `score` stat.
   const score =
@@ -966,6 +987,9 @@ async function ingestReportAction(reportDir: string, options: IngestReportOption
     ? [...seenCheckItemIds].filter((id) => !plan.some((item) => item.id === id))
     : [];
 
+  const recovery = failedEvidence.some((failure) => failure.reason === 'storage_quota')
+    ? await storageQuotaRecovery(client)
+    : undefined;
   const partial = failedEvidence.length > 0 || missingEvidence.length > 0;
   if (partial) {
     process.exitCode = 1;
@@ -977,11 +1001,7 @@ async function ingestReportAction(reportDir: string, options: IngestReportOption
         'Unexecuted checks have no result to attach evidence to. Execute them and publish a new round on the same acceptance; do not re-ingest this unchanged report.',
       );
     }
-    if (failedEvidence.some((failure) => failure.reason === 'storage_quota')) {
-      log.warn(
-        'Acceptance evidence uses your personal file storage quota. Free space or upgrade your storage plan, then retry the failed artifacts.',
-      );
-    }
+    if (recovery) log.warn(recovery.message);
   }
 
   if (options.json !== undefined) {
@@ -1000,6 +1020,7 @@ async function ingestReportAction(reportDir: string, options: IngestReportOption
         proposalPosted,
         publicationStatus: partial ? 'partial' : 'complete',
         pullRequest,
+        recovery,
         roundIndex,
         roundUrl,
         scenario,

@@ -82,11 +82,14 @@ import {
 } from '../utils/agentKnowledgeMounts';
 import { rehomeAgentLabelsForRecipient } from '../utils/agentLabelsOwnership';
 import { rehomeAgentQuotaBindingsForRecipient } from '../utils/agentQuotaBindings';
+import { notFileBackedPlaceholder } from '../utils/fileBackedPlaceholder';
 import { genEndDateWhere, genRangeWhere, genStartDateWhere, genWhere } from '../utils/genWhere';
 import { resolveGroupMembershipType } from '../utils/groupMembership';
 import { normalizeInboxAgentMeta } from '../utils/inboxAgent';
+import { readOriginalCharCount } from '../utils/parsedDocument';
 import { sanitizeAgentApiConfig } from '../utils/sanitizeAgentApiConfig';
 import { notShareVisitorTopic } from '../utils/shareVisitor';
+import { notTrashed } from '../utils/softDelete';
 import { buildWorkspacePayload, buildWorkspaceWhere } from '../utils/workspace';
 import { AGENT_COPY_IN_PROGRESS, AgentCopyJobModel } from './agentCopyJob';
 import {
@@ -118,6 +121,10 @@ import {
  * not just the fields each historically happened to receive. Clients on builds older than
  * PR #16420 can still hit this path, so enforce it here (the single write chokepoint)
  * regardless of caller.
+ *
+ * Such a write is rejected, not silently trimmed: the writer is almost always aiming at a
+ * different agent (the one the builder is editing), and a trimmed write still reports
+ * success — the caller would believe the prompt/name landed when nothing changed.
  */
 const AGENT_BUILDER_PROTECTED_FIELDS = [
   'title',
@@ -129,6 +136,18 @@ const AGENT_BUILDER_PROTECTED_FIELDS = [
   'marketIdentifier',
   'systemRole',
 ] as const;
+
+const assertNoAgentBuilderProtectedFields = (data: Record<string, unknown>) => {
+  const fields = AGENT_BUILDER_PROTECTED_FIELDS.filter((field) => data[field] !== undefined);
+  if (fields.length === 0) return;
+
+  throw new TRPCError({
+    code: 'FORBIDDEN',
+    message:
+      `The Agent Builder's own ${fields.join(', ')} cannot be changed, so nothing was updated. ` +
+      'Target the agent being edited instead.',
+  });
+};
 
 /**
  * Fields that define a row's identity, scope and provisioning status. Every one of
@@ -282,7 +301,10 @@ export class AgentModel {
         title: agents.title,
       })
       .from(agents)
-      .leftJoin(topics, and(eq(topics.agentId, agents.id), notShareVisitorTopic()))
+      .leftJoin(
+        topics,
+        and(eq(topics.agentId, agents.id), notShareVisitorTopic(), notTrashed(topics.isDeleted)),
+      )
       .where(and(this.ownership(), or(eq(agents.slug, INBOX_SESSION_ID), ne(agents.virtual, true))))
       .groupBy(agents.id)
       .having(({ count }) => gt(count, 0))
@@ -303,6 +325,7 @@ export class AgentModel {
     buildWorkspaceWhere(
       { userId: this.userId, workspaceId: this.workspaceId },
       {
+        isDeleted: agents.isDeleted,
         userId: agents.userId,
         workspaceId: agents.workspaceId,
         visibility: agents.visibility,
@@ -487,7 +510,7 @@ export class AgentModel {
     const rows = await this.db
       .select({ id: agents.id })
       .from(agents)
-      .where(and(eq(agents.id, id), eq(agents.userId, this.userId)))
+      .where(and(eq(agents.id, id), eq(agents.userId, this.userId), notTrashed(agents.isDeleted)))
       .limit(1);
 
     return rows.length > 0;
@@ -768,19 +791,34 @@ export class AgentModel {
       .filter((f) => f.enabled)
       .map((f) => f.id)
       .filter((id) => id !== undefined);
-    let files: Array<(typeof knowledge.files)[number] & { content?: string | null }> =
-      knowledge.files;
+    let files: Array<
+      (typeof knowledge.files)[number] & { content?: string | null; originalCharCount?: number }
+    > = knowledge.files;
 
     if (enabledFileIds.length > 0) {
       const documentsData = await this.db.query.documents.findMany({
-        where: and(this.documentsOwnership(), inArray(documents.fileId, enabledFileIds)),
+        // A file can own several documents; take the oldest, like `DocumentModel.findByFileId`
+        // (which `readAttachment` pages through), so the preview and its continuation agree.
+        orderBy: [asc(documents.createdAt), asc(documents.id)],
+        where: and(
+          this.documentsOwnership(),
+          inArray(documents.fileId, enabledFileIds),
+          notFileBackedPlaceholder(),
+        ),
       });
 
-      const documentMap = new Map(documentsData.map((doc) => [doc.fileId, doc.content]));
-      files = knowledge.files.map((file) => ({
-        ...file,
-        content: file.enabled && file.id ? documentMap.get(file.id) : undefined,
-      }));
+      const documentMap = new Map<string | null, (typeof documentsData)[number]>();
+      for (const doc of documentsData) {
+        if (!documentMap.has(doc.fileId)) documentMap.set(doc.fileId, doc);
+      }
+      files = knowledge.files.map((file) => {
+        const document = file.enabled && file.id ? documentMap.get(file.id) : undefined;
+        return {
+          ...file,
+          content: document?.content,
+          originalCharCount: readOriginalCharCount(document?.metadata),
+        };
+      });
     }
 
     return { ...normalizedAgent, ...knowledge, files };
@@ -1133,10 +1171,8 @@ export class AgentModel {
     const apiSafeData = Object.hasOwn(data, 'agencyConfig')
       ? { ...data, agencyConfig: sanitizeAgentApiConfig(data.agencyConfig) }
       : data;
-    const sanitizedData = await this.stripAgentBuilderProtectedFields(
-      agentId,
-      this.stripImmutableFields(apiSafeData),
-    );
+    const sanitizedData = this.stripImmutableFields(apiSafeData);
+    await this.assertNotAgentBuilderProtectedWrite(agentId, sanitizedData);
 
     return this.db
       .update(agents)
@@ -1145,27 +1181,22 @@ export class AgentModel {
   };
 
   /**
-   * Strip fields the Agent Builder's own row must never carry (see
+   * Reject a write of fields the Agent Builder's own row must never carry (see
    * {@link AGENT_BUILDER_PROTECTED_FIELDS}). Only looks up the target row's `slug` when the
    * incoming patch actually touches a protected field, so normal updates pay no extra query.
    */
-  private stripAgentBuilderProtectedFields = async <T extends Record<string, any>>(
+  private assertNotAgentBuilderProtectedWrite = async (
     agentId: string,
-    data: T,
-    protectedFields: readonly string[] = AGENT_BUILDER_PROTECTED_FIELDS,
-  ): Promise<T> => {
-    if (!protectedFields.some((field) => field in data)) return data;
+    data: Record<string, unknown>,
+  ) => {
+    if (!AGENT_BUILDER_PROTECTED_FIELDS.some((field) => data[field] !== undefined)) return;
 
     const agent = await this.db.query.agents.findFirst({
       columns: { slug: true },
       where: and(eq(agents.id, agentId), this.ownership()),
     });
 
-    if (agent?.slug !== BUILTIN_AGENT_SLUGS.agentBuilder) return data;
-
-    const sanitized = { ...data };
-    for (const field of protectedFields) delete sanitized[field];
-    return sanitized;
+    if (agent?.slug === BUILTIN_AGENT_SLUGS.agentBuilder) assertNoAgentBuilderProtectedFields(data);
   };
 
   /**
@@ -1422,8 +1453,15 @@ export class AgentModel {
     // See AGENT_BUILDER_PROTECTED_FIELDS: some callers (e.g. the browser client's meta
     // editor) route title/avatar/etc. through updateConfig() rather than update().
     if (agent.slug === BUILTIN_AGENT_SLUGS.agentBuilder) {
-      for (const field of AGENT_BUILDER_PROTECTED_FIELDS) delete restData[field];
+      assertNoAgentBuilderProtectedFields(restData as Record<string, unknown>);
     }
+
+    // Only the columns this patch touches are written back. The row was read
+    // before the awaits above, so writing the whole merged row would restore
+    // any column another writer committed in between — e.g. a parallel
+    // `updatePrompt` losing its new systemRole to a concurrent config write.
+    const touchedColumns = new Set<string>(Object.keys(restData));
+    if (data.params) touchedColumns.add('params');
 
     const mergedValue = merge(agent, restData);
 
@@ -1453,9 +1491,11 @@ export class AgentModel {
     if (agent.slug === INBOX_SESSION_ID) {
       if (mergedValue.agencyConfig?.heterogeneousProvider) {
         delete mergedValue.agencyConfig.heterogeneousProvider;
+        touchedColumns.add('agencyConfig');
       }
       if (isHeterogeneousAgentModelId(mergedValue.model)) {
         mergedValue.model = null;
+        touchedColumns.add('model');
       }
     }
 
@@ -1481,6 +1521,7 @@ export class AgentModel {
       // ownership of the graph: drop the legacy chatConfig fields so the
       // runtime's `??` fallback cannot resurrect an old snapshot.
       if (mergedValue.chatConfig) {
+        touchedColumns.add('chatConfig');
         const {
           graph: _legacyGraph,
           enableGraphMode: _legacyEnableGraphMode,
@@ -1489,6 +1530,7 @@ export class AgentModel {
         mergedValue.chatConfig = restChatConfig as AgentItem['chatConfig'];
       }
     } else if (data.chatConfig && Object.hasOwn(data.chatConfig, 'graph')) {
+      touchedColumns.add('agencyConfig');
       const legacyChatConfig = data.chatConfig as Record<string, unknown>;
       mergedValue.agencyConfig = {
         ...mergedValue.agencyConfig,
@@ -1527,9 +1569,15 @@ export class AgentModel {
       }
     }
 
-    // Remove timestamp fields to let Drizzle's $onUpdate handle them automatically
+    // Timestamp fields are left to Drizzle's $onUpdate.
+    touchedColumns.delete('updatedAt');
+    touchedColumns.delete('accessedAt');
+    touchedColumns.delete('createdAt');
 
-    const { updatedAt: _, accessedAt: __, createdAt: ___, ...updateData } = mergedValue;
+    const updateData = Object.fromEntries(
+      Object.entries(mergedValue).filter(([column]) => touchedColumns.has(column)),
+    ) as Partial<typeof mergedValue>;
+    if (!Object.values(updateData).some((value) => value !== undefined)) return;
 
     return this.db
       .update(agents)
@@ -1565,6 +1613,7 @@ export class AgentModel {
           buildWorkspaceWhere(
             { userId: this.userId, workspaceId: this.workspaceId },
             {
+              isDeleted: sessionGroups.isDeleted,
               userId: sessionGroups.userId,
               visibility: sessionGroups.visibility,
               workspaceId: sessionGroups.workspaceId,
@@ -1975,6 +2024,7 @@ export class AgentModel {
         visible: sql<boolean>`(${buildWorkspaceWhere(
           { userId: this.userId, workspaceId: this.workspaceId },
           {
+            isDeleted: chatGroups.isDeleted,
             userId: chatGroups.userId,
             visibility: chatGroups.visibility,
             workspaceId: chatGroups.workspaceId,

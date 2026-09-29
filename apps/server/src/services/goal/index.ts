@@ -1,9 +1,14 @@
 import type { GoalAdvanceEffect, GoalMetricCriteriaState } from '@lobechat/agent-tracing';
 import { buildGoalRequirement } from '@lobechat/builtin-tool-goal';
-import { GOAL_COORDINATOR_ACTOR_ID } from '@lobechat/const/goal';
+import {
+  GOAL_CLARIFICATION_OPTION,
+  GOAL_CLARIFICATION_TITLE,
+  GOAL_COORDINATOR_ACTOR_ID,
+} from '@lobechat/const/goal';
 import type {
   GoalConfig,
   GoalCreateConfig,
+  GoalDecisionOption,
   GoalEdgeKind,
   GoalGraphNode,
   GoalGraphSnapshot,
@@ -38,6 +43,8 @@ import type { LobeChatDatabase } from '@/database/type';
 import { assertAgentUsableBy } from '@/database/utils/agent-access';
 import { AgentRuntimeCoordinator } from '@/server/modules/AgentRuntime/AgentRuntimeCoordinator';
 
+import { readDeviceDispatchRoute } from '../aiAgent/helpers/heteroErrors';
+import { deviceGateway } from '../deviceGateway';
 import { TaskService } from '../task';
 import { TaskRunnerService } from '../taskRunner';
 import { AcceptanceService } from '../verify/acceptanceService';
@@ -58,6 +65,10 @@ import {
 import { experimentResults, exploreGraph } from './exploreGraph';
 import { answeredProblem, GoalManagerService, problemKey } from './manager';
 import {
+  DEFAULT_MANAGER_MAX_TURNS,
+  DEVICE_RECONNECT_WAIT_MS,
+  isDeviceUnavailableFailure,
+  managerTurnsSpent,
   resolveMaxConcurrentTasks,
   resolveOperationLeaseTimeout,
   resolveTaskMaxSteps,
@@ -72,6 +83,13 @@ import {
   toFrontierTaskState,
   toTraceGraphState,
 } from './traceObservation';
+import {
+  clarificationOptions,
+  collectClarificationAnswers,
+  hasAskedClarification,
+  normalizeUnderstanding,
+  UNDERSTANDING_CONFIDENCE,
+} from './understanding';
 
 const TASK_NODE_CLAIM_TTL_MS = 5 * 60 * 1000;
 const TASK_DESCRIPTION_MAX_LENGTH = 255;
@@ -313,7 +331,7 @@ export class GoalService {
           message: 'A main Agent requires the goal agent',
         });
       }
-      const turns = managerOptions?.maxTurns ?? 12;
+      const turns = managerOptions?.maxTurns ?? DEFAULT_MANAGER_MAX_TURNS;
       if (!Number.isInteger(turns) || turns < 1 || turns > 100)
         throw new TRPCError({
           code: 'BAD_REQUEST',
@@ -1273,13 +1291,18 @@ export class GoalService {
     goalId: string,
     budget: {
       deadline?: string | null;
+      maxAttemptsPerTask?: number;
+      maxConcurrentTasks?: number | null;
       maxExperiments?: number;
+      maxManagerTurns?: number;
       maxRounds?: number | null;
+      maxStepsPerRun?: number | null;
       maxTotalCost?: number | null;
     },
   ) => {
     const before = await this.requireGraph(goalId);
     const wasBinding = await this.evaluateBudget(before.goal, before);
+    const managerTurnsWereSpent = managerTurnsSpent(before.goal.config);
 
     // Deadline joins the two execution budgets on the goal row's config; null
     // clears it, and omitting it leaves it alone — the cost/round editor sends
@@ -1303,6 +1326,29 @@ export class GoalService {
     if (budget.deadline !== undefined) {
       config.schedule = { ...config.schedule, deadline: budget.deadline };
     }
+    // The limits a goal is created with stay editable: a goal that ran into one
+    // must be continued with a higher one, not replaced by a copy of itself.
+    if (budget.maxManagerTurns !== undefined) {
+      if (!config.manager) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Only a Goal with a main Agent has a turn budget',
+        });
+      }
+      config.manager = { ...config.manager, maxTurns: budget.maxManagerTurns };
+    }
+    if (budget.maxConcurrentTasks !== undefined) {
+      config.maxConcurrentTasks = budget.maxConcurrentTasks;
+    }
+    if (budget.maxAttemptsPerTask !== undefined || budget.maxStepsPerRun !== undefined) {
+      config.recovery = {
+        ...config.recovery,
+        ...(budget.maxAttemptsPerTask !== undefined && {
+          maxAttemptsPerTask: budget.maxAttemptsPerTask,
+        }),
+        ...(budget.maxStepsPerRun !== undefined && { maxStepsPerRun: budget.maxStepsPerRun }),
+      };
+    }
 
     const goal = await this.goalModel.update(goalId, {
       config,
@@ -1320,10 +1366,13 @@ export class GoalService {
     const stoppedByBudget =
       wasBinding.costLimitReached || wasBinding.roundLimitReached || wasBinding.deadlinePassed;
     const stoppedByExploration = before.goal.config?.pausedBy === 'exploration_limit';
+    // The main Agent pauses its goal when its turns run out, and resuming alone
+    // pauses it again on the next tick. Raising the cap is what lets it continue.
+    const stoppedByManagerTurns = managerTurnsWereSpent && !managerTurnsSpent(goal.config);
     if (
       goal.status !== 'paused' ||
       goal.config?.pausedBy === 'user' ||
-      (!stoppedByBudget && !stoppedByExploration)
+      (!stoppedByBudget && !stoppedByExploration && !stoppedByManagerTurns)
     )
       return goal;
     if (
@@ -1360,6 +1409,11 @@ export class GoalService {
     }
     if (decision.options?.length && !decision.options.some((option) => option.id === optionId)) {
       throw new TRPCError({ code: 'BAD_REQUEST', message: 'Unknown decision option' });
+    }
+    // The note *is* the answer for this option; an empty one would re-plan the
+    // goal on nothing and the question could never be asked again.
+    if (optionId === GOAL_CLARIFICATION_OPTION.answer && !resolution?.trim()) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'This answer needs a note' });
     }
     const resolved = await this.graphModel.resolveDecision(
       goalId,
@@ -1400,6 +1454,83 @@ export class GoalService {
       `decision "${decision.question}" resolved: ${optionId}`,
     );
     return resolved;
+  };
+
+  /**
+   * Answer a goal's clarification round in one go. Each answer resolves like a
+   * single `decide`; the caller schedules one advance afterwards, so the
+   * re-plan sees every answer instead of running after the first.
+   */
+  answerClarifications = async (
+    goalId: string,
+    answers: Array<{ decisionId: string; optionId: string; resolution?: string }>,
+  ) => {
+    const graph = await this.requireGraph(goalId);
+    const decisions = new Map(graph.decisions.map((decision) => [decision.id, decision]));
+
+    // Check the whole round before writing any of it: one bad answer used to
+    // leave the ones before it resolved, and the client's retry then failed on
+    // those. An answer already recorded as given is a retry, not a conflict.
+    const toResolve = answers.filter((answer) => {
+      const decision = decisions.get(answer.decisionId);
+      if (!decision) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Pending decision not found' });
+      }
+      if (decision.status === 'resolved' && decision.resolvedOptionId === answer.optionId) {
+        return false;
+      }
+      if (decision.status !== 'pending') {
+        throw new TRPCError({ code: 'CONFLICT', message: 'Decision was already resolved' });
+      }
+      if (decision.options?.length && !decision.options.some((o) => o.id === answer.optionId)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Unknown decision option' });
+      }
+      if (answer.optionId === GOAL_CLARIFICATION_OPTION.answer && !answer.resolution?.trim()) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'This answer needs a note' });
+      }
+      return true;
+    });
+
+    for (const answer of toResolve) {
+      await this.decide(goalId, answer.decisionId, answer.optionId, answer.resolution);
+    }
+  };
+
+  /** Pending clarifications grouped by goal, for surfaces outside the goal page. */
+  pendingClarifications = async () => {
+    const rows = await this.goalModel.listPendingClarifications();
+    const byGoal = new Map<
+      string,
+      {
+        agentId: string | null;
+        goalId: string;
+        questions: Array<{
+          decisionId: string;
+          description: string | null;
+          options: GoalDecisionOption[];
+          question: string;
+        }>;
+        requirement: string | null;
+        title: string;
+      }
+    >();
+    for (const row of rows) {
+      const group = byGoal.get(row.goalId) ?? {
+        agentId: row.agentId,
+        goalId: row.goalId,
+        questions: [],
+        requirement: row.requirement,
+        title: row.goalTitle,
+      };
+      group.questions.push({
+        decisionId: row.decisionId,
+        description: row.description,
+        options: row.options ?? [],
+        question: row.question,
+      });
+      byGoal.set(row.goalId, group);
+    }
+    return [...byGoal.values()];
   };
 
   /**
@@ -1618,6 +1749,8 @@ export class GoalService {
           }
 
           case 'failure_decision': {
+            const waiting = await this.waitForDevice(graph, acting!.id, task, effects);
+            if (waiting) return observe(waiting);
             const supervision = await new GoalSupervisorService(
               this.db,
               this.userId,
@@ -1944,6 +2077,18 @@ export class GoalService {
       };
     }
 
+    // The retry never reached a device. The Task keeps that reason, and the next
+    // advance waits for the device to come back rather than asking a person.
+    if (recovery.outcome === 'spawn-failed' && recovery.deviceUnavailable) {
+      return {
+        goalId: graph.goal.id,
+        message: `Task ${task.identifier} is waiting for its device to reconnect`,
+        nodeId,
+        outcome: 'waiting_external',
+        taskId: task.id,
+      };
+    }
+
     // Nothing failed: somebody settled the Task while this advance was deciding.
     // Opening a gate would ask them to judge their own decision.
     if (recovery.outcome === 'settled') {
@@ -2175,12 +2320,14 @@ export class GoalService {
 
     const latestUsage = await new AgentRuntimeCoordinator().getOperationMetadata(operationId);
     const reclaimed = await this.db.transaction(async (tx) => {
-      const settled = await new AgentOperationModel(
-        tx,
-        this.userId,
-        this.workspaceId,
-      ).settleStaleRunning(operationId, staleBefore, latestUsage?.totalCost);
-      if (!settled) return false;
+      const operationModel = new AgentOperationModel(tx, this.userId, this.workspaceId);
+      const settled = await operationModel.settleStaleRunning(
+        operationId,
+        staleBefore,
+        latestUsage?.totalCost,
+      );
+      if (!settled && !(await isOrphanedRun(operationModel, operationId, staleBefore)))
+        return false;
 
       await new TaskTopicModel(tx, this.userId, this.workspaceId).updateStatus(
         task.id,
@@ -2234,6 +2381,18 @@ export class GoalService {
       };
     }
 
+    // The retry never reached a device. The Task keeps that reason, and the next
+    // advance waits for the device to come back rather than asking a person.
+    if (recovery.outcome === 'spawn-failed' && recovery.deviceUnavailable) {
+      return {
+        goalId: graph.goal.id,
+        message: `Task ${task.identifier} is waiting for its device to reconnect`,
+        nodeId,
+        outcome: 'waiting_external',
+        taskId: task.id,
+      };
+    }
+
     // Nothing failed: somebody settled the Task while this advance was deciding.
     // Opening a gate would ask them to judge their own decision.
     if (recovery.outcome === 'settled') {
@@ -2252,6 +2411,56 @@ export class GoalService {
           ? 'Task attempt budget was exhausted after an operation was abandoned'
           : 'Automatic recovery could not restart an abandoned operation';
     return this.gateOrTakeOver(graph, nodeId, task.id, reason, effects);
+  };
+
+  /**
+   * Hold a Task whose run could not reach its device until a device is back.
+   *
+   * A sleeping laptop or a restarting desktop app is the usual cause, and it
+   * fixes itself: the gate it used to open waited hours for someone to press
+   * Retry once the device had long reconnected. While that device is offline
+   * the goal simply waits — the sweep keeps asking — and spends nothing. Once
+   * it is back, the Task retries through the ordinary recovery path, so a
+   * binding that stays broken still ends at the attempt budget's gate. Past the
+   * reconnect window a person is asked after all, since the device is not
+   * coming back on its own.
+   *
+   * Presence is read for the exact device the failed dispatch was routed to,
+   * in the pool it was routed through: a workspace goal may run on a personal
+   * device, and another device coming online proves nothing about this one.
+   * Without a recorded route, or without a device gateway at all, there is
+   * nothing to wait for and the existing failure path decides.
+   */
+  private waitForDevice = async (
+    graph: GoalGraphSnapshot,
+    nodeId: string,
+    task: TaskItem,
+    effects: GoalAdvanceEffect[],
+  ): Promise<GoalTickResult | undefined> => {
+    if (task.status !== 'paused' || !isDeviceUnavailableFailure(task.error)) return;
+    if (!deviceGateway.isConfigured) return;
+    if (new Date(task.updatedAt).getTime() < Date.now() - DEVICE_RECONNECT_WAIT_MS) return;
+
+    const [latestRun] = await this.taskTopicModel.findWithHandoff(task.id, 1);
+    const operation = latestRun?.operationId
+      ? await new AgentOperationModel(this.db, this.userId, this.workspaceId).findById(
+          latestRun.operationId,
+        )
+      : undefined;
+    const route = readDeviceDispatchRoute(operation?.error);
+    if (!route) return;
+
+    const devices = await deviceGateway.queryDeviceList(route.userId, route.workspaceId);
+    if (devices.some((device) => device.deviceId === route.deviceId))
+      return this.resumeAbandonedTaskRecovery(graph, nodeId, task, effects);
+
+    return {
+      goalId: graph.goal.id,
+      message: `Task ${task.identifier} is waiting for its device to reconnect`,
+      nodeId,
+      outcome: 'waiting_external',
+      taskId: task.id,
+    };
   };
 
   private buildTaskInstruction = (
@@ -2308,10 +2517,38 @@ export class GoalService {
       }
 
       const generator = new GoalCriteriaGeneratorService(this.db, this.userId, this.workspaceId);
-      const plan = await generator.decompose({ requirement }).catch(() => undefined);
+      const clarifications = collectClarificationAnswers(graph);
+      const plan = await generator
+        .decompose({ clarifications, requirement })
+        .catch(() => undefined);
+      // A graph without a problem node has nowhere to hang a question, so its
+      // questions are planned around as assumptions like a re-plan's would be.
+      const understanding = plan
+        ? normalizeUnderstanding(
+            plan,
+            hasAskedClarification(graph) || !problem,
+            clarifications.map((item) => item.question),
+          )
+        : undefined;
 
       const draftTasks: GoalDecompositionDraft['tasks'] = plan?.tasks ?? [
-        { instruction: problem?.description ?? requirement, title: graph.goal.title },
+        {
+          // The user's answers are authoritative; a planner failure after the
+          // clarification round must not start the work without them.
+          instruction: [
+            // After a clarification round, scope the work by the original request
+            // plus the answers — never by a summary a planner wrote earlier.
+            clarifications.length > 0 ? requirement : (problem?.description ?? requirement),
+            clarifications.length > 0
+              ? `Answered clarifications (authoritative):\n${clarifications
+                  .map((item) => `- Q: ${item.question}\n  A: ${item.answer}`)
+                  .join('\n')}`
+              : undefined,
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
+          title: graph.goal.title,
+        },
       ];
 
       // Only the current lease owner may commit. The model call above does not
@@ -2342,10 +2579,55 @@ export class GoalService {
           return undefined;
         const committedEffects: GoalAdvanceEffect[] = [];
 
+        const asking = Boolean(understanding?.ask.length && currentProblem);
         if (plan && currentProblem) {
           // The node's description becomes the planner's own words for the core
-          // question — not the acceptance boilerplate the goal row keeps.
-          await writer.updateNodeDescription(goalId, currentProblem.id, plan.problemStatement);
+          // question — not the acceptance boilerplate the goal row keeps. A plan
+          // that stops to ask commits no tasks, so it keeps the user's own words:
+          // the re-plan, or its fallback, must still read the original request.
+          await writer.updateNodeDescription(
+            goalId,
+            currentProblem.id,
+            asking ? (currentProblem.description ?? plan.problemStatement) : plan.problemStatement,
+            understanding && UNDERSTANDING_CONFIDENCE[understanding.level],
+          );
+        }
+        if (understanding) {
+          await goalModel.updateUnderstanding(goalId, {
+            assumptions: understanding.assumptions,
+            level: understanding.level,
+            updatedAt: new Date().toISOString(),
+          });
+        }
+
+        // A question only the user can answer is asked before anything runs:
+        // Tasks planned on a wrong reading of the goal are the most expensive
+        // way to find out. No Task is created, so the next plan — made with the
+        // answers — starts from the same empty graph.
+        if (asking && understanding && currentProblem) {
+          for (const question of understanding.ask) {
+            const node = await writer.createNode(goalId, {
+              description: question.impact,
+              kind: 'decision',
+              status: 'waiting',
+              title: GOAL_CLARIFICATION_TITLE,
+            });
+            if (!node) throw new Error('Failed to open a clarification decision');
+            await writer.createEdge(goalId, currentProblem.id, node.id, 'leads_to');
+            await writer.createDecision(goalId, node.id, {
+              authority: 'user',
+              options: clarificationOptions(question),
+              question: question.question,
+              requestedUserId: this.userId,
+            });
+            committedEffects.push({
+              detail: question.question,
+              nodeId: currentProblem.id,
+              targetId: node.id,
+              type: 'opened_decision',
+            });
+          }
+          return committedEffects;
         }
 
         const createdIds: string[] = [];
@@ -2403,6 +2685,15 @@ export class GoalService {
         };
       }
       effects.push(...committed);
+
+      const asked = committed.filter((effect) => effect.type === 'opened_decision').length;
+      if (asked > 0) {
+        return {
+          goalId,
+          message: `Asked ${asked} clarification question${asked > 1 ? 's' : ''} before planning`,
+          outcome: 'advanced' as const,
+        };
+      }
 
       return {
         goalId,
@@ -2731,3 +3022,35 @@ export class GoalService {
     };
   };
 }
+
+/** Operation states that still own their run; the lease path reclaims them, not this. */
+const IN_FLIGHT_OPERATION_STATUSES = new Set([
+  'idle',
+  'running',
+  'waiting_for_async_tool',
+  'waiting_for_human',
+]);
+
+/**
+ * Whether a Task topic is still `running` although its run has already ended.
+ *
+ * The run's terminal normally moves the topic through the task lifecycle hook,
+ * but that delivery can be lost — a watchdog-abandoned device run had none at
+ * all, and a dropped webhook has no retry. The lease reclaim cannot see these:
+ * it only settles an operation that is itself still `running`, so the Task
+ * stays in flight forever and its goal with it. Once the run has been over for
+ * longer than the lease, nothing is left to report it and the topic is lost.
+ *
+ * A missing operation row proves nothing — a run executed on the client never
+ * writes one — so only a row that says the run ended counts.
+ */
+const isOrphanedRun = async (
+  operationModel: AgentOperationModel,
+  operationId: string,
+  staleBefore: Date,
+): Promise<boolean> => {
+  const operation = await operationModel.findById(operationId);
+  if (!operation || IN_FLIGHT_OPERATION_STATUSES.has(operation.status)) return false;
+  const endedAt = operation.completedAt ?? operation.updatedAt;
+  return new Date(endedAt) < staleBefore;
+};

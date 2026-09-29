@@ -229,6 +229,18 @@ describe('AGENT_SHARE_ALLOWED_BUILTIN_IDENTIFIERS', () => {
   it('allowlists lobe-cloud-sandbox now that visitor runs get a credential-free sandbox session', () => {
     expect(AGENT_SHARE_ALLOWED_BUILTIN_IDENTIFIERS.has('lobe-cloud-sandbox')).toBe(true);
   });
+
+  it('allowlists video generation but still requires the owner grant to dispatch it', () => {
+    expect(AGENT_SHARE_ALLOWED_BUILTIN_IDENTIFIERS.has('lobe-video-generation')).toBe(true);
+    expect(isShareBlockedBuiltinDispatch({}, 'lobe-video-generation', 'generateVideo')).toBe(true);
+    expect(
+      isShareBlockedBuiltinDispatch(
+        { toolGrants: [{ identifier: 'lobe-video-generation' }] },
+        'lobe-video-generation',
+        'generateVideo',
+      ),
+    ).toBe(false);
+  });
 });
 
 /**
@@ -605,7 +617,7 @@ describe('applyShareGateToToolSet', () => {
   // `lobe-skills` is an always-on builtin, so it reaches the tool set without
   // ever appearing in the owner's `toolGrants`. Its opt-in is the SKILL list:
   // the gate derives a synthetic tool grant from `skillGrants`, then narrows it
-  // to the two read APIs. Regression for LOBE-14266, where the tool was simply
+  // to the two read APIs. Regression for the bug where the tool was simply
   // absent from the allowlist and every skill-driven shared agent broke.
   const buildSkillsToolSet = () => {
     const toolSet = buildToolSet([

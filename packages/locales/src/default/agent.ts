@@ -351,6 +351,15 @@ export default {
   'channel.displayToolCalls': 'Display Tool Calls',
   'channel.displayToolCallsHint':
     'Show tool call details during AI responses. When disabled, only the final response is displayed for a cleaner experience.',
+  'channel.reactionMode': 'Status Reactions',
+  'channel.reactionModeHint':
+    'How the bot updates the emoji reaction on your message while it works. Every change can notify members who have message alerts enabled.',
+  'channel.reactionModeMinimal': 'Minimal',
+  'channel.reactionModeMinimalHint': 'Acknowledge, mark as thinking, then remove when done',
+  'channel.reactionModeFull': 'Detailed',
+  'channel.reactionModeFullHint': 'Also switch between thinking and working after every step',
+  'channel.reactionModeNone': 'Off',
+  'channel.reactionModeNoneHint': 'Never add status reactions',
   'channel.historyLimit': 'History Message Limit',
   'channel.historyLimitHint': 'Default number of messages to fetch when reading channel history',
   'channel.serverId': 'Default Server ID',

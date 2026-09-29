@@ -170,6 +170,7 @@ export default {
   'localFiles.open': 'Open',
   'localFiles.openFile': 'Open File',
   'localFiles.openFolder': 'Open Folder',
+  'localFiles.openInPanel': 'Open in side panel',
   'localFiles.outOfScope.requestedPaths': 'Requested Paths',
   'localFiles.outOfScope.warning':
     'Warning: The following path(s) are outside the configured working directory. Please confirm you want to allow access.',

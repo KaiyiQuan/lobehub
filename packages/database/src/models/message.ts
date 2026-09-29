@@ -59,6 +59,7 @@ import {
   inArray,
   isNotNull,
   isNull,
+  lt,
   lte,
   ne,
   not,
@@ -95,14 +96,51 @@ import {
 import type { LobeChatDatabase, Transaction } from '../type';
 import { sanitizeBm25Query } from '../utils/bm25';
 import { notCopiedTranscript } from '../utils/copiedTranscript';
+import { notFileBackedPlaceholder } from '../utils/fileBackedPlaceholder';
 import { genEndDateWhere, genRangeWhere, genStartDateWhere, genWhere } from '../utils/genWhere';
 import { idGenerator } from '../utils/idGenerator';
 import { inJsonStringArray } from '../utils/inJsonStringArray';
+import { documentOriginalCharCount } from '../utils/originalCharCount';
 import { searchableMessage } from '../utils/searchableMessage';
 import { notShareVisitorMessage, notShareVisitorTopicRef } from '../utils/shareVisitor';
 import { buildWorkspacePayload, buildWorkspaceWhere } from '../utils/workspace';
 import { recomputeTopicUsage } from './topicUsage';
 import { WorkModel } from './work';
+
+/**
+ * Parsed-document columns attached to chat file items. `originalCharCount` is only set when the
+ * stored text was cut at parse time; prompts use it to tell the model the text is incomplete.
+ * Selected as a scalar so the rest of `metadata` never leaves the database.
+ */
+const fileDocumentColumns = {
+  content: documents.content,
+  fileId: documents.fileId,
+  originalCharCount: documentOriginalCharCount().mapWith(Number),
+};
+
+/**
+ * A file can own more than one document (`parseDocument` writes a page-editor copy next to the parse
+ * cache). Every reader picks the oldest, matching `DocumentModel.findByFileId`, so a preview and the
+ * `readAttachment` pages that continue it come from the same text.
+ */
+const fileDocumentsOrder = [asc(documents.createdAt), asc(documents.id)];
+
+type FileDocumentsMap = Record<string, { content: string; originalCharCount?: number }>;
+
+const toFileDocumentsMap = (
+  rows: { content: string | null; fileId: string | null; originalCharCount: number | null }[],
+): FileDocumentsMap =>
+  rows.reduce<FileDocumentsMap>((acc, doc) => {
+    // Rows arrive oldest first (see `fileDocumentsOrder`); keep the first so the prompt shows the
+    // same document `DocumentModel.findByFileId` — and therefore `readAttachment` — pages through.
+    if (doc.fileId && !(doc.fileId in acc)) {
+      acc[doc.fileId] = {
+        content: doc.content as string,
+        originalCharCount: doc.originalCharCount ?? undefined,
+      };
+    }
+    return acc;
+  }, {});
 
 const createChatImageItem = ({
   id,
@@ -188,6 +226,11 @@ export interface QueryMessagesOptions {
    */
   allowShareVisitor?: boolean;
   /**
+   * Round-cursor for loading older history (see `QueryMessageParams.before`):
+   * only rows strictly older than this `(createdAt, id)` tuple are fetched.
+   */
+  before?: { createdAt: Date; id: string };
+  /**
    * Current page number (0-indexed)
    */
   current?: number;
@@ -230,10 +273,13 @@ export interface QueryMessagesOptions {
 }
 
 export interface TopicTranscriptMessage {
+  agentId: string | null;
   content: string | null;
   createdAt: Date;
+  error: ChatMessageError | null;
   id: string;
   messageGroupId: string | null;
+  metadata: MessageMetadata | null;
   parentId: string | null;
   role: string;
   threadId: string | null;
@@ -316,7 +362,7 @@ interface ActiveBranchSnapshot {
 }
 
 interface MessageFileRelations {
-  documentsMap: Record<string, string>;
+  documentsMap: FileDocumentsMap;
   relatedFileList: MessageRelatedFile[];
 }
 
@@ -366,6 +412,7 @@ interface CreateMessageRelationParams {
   fileChunks?: CreateMessageParams['fileChunks'];
   files?: CreateMessageParams['files'];
   plugin?: CreateMessageParams['plugin'];
+  pluginError?: CreateMessageParams['pluginError'];
   pluginIntervention?: CreateMessageParams['pluginIntervention'];
   pluginState?: CreateMessageParams['pluginState'];
   ragQueryId?: CreateMessageParams['ragQueryId'];
@@ -977,13 +1024,28 @@ export class MessageModel {
   }
 
   /**
-   * Raw workspace/user scope, WITHOUT the visitor exclusion. Backing store
-   * for {@link ownership} and the escape hatch for methods that resolve the
+   * Workspace/user scope plus the live parent-topic fence, WITHOUT the visitor
+   * exclusion. Topic-less rows remain valid. Backing store for
+   * {@link ownership} and the escape hatch for methods that resolve the
    * effective visitor gate per-call ({@link deleteMessage},
    * {@link deleteMessages}, {@link query} via `allowShareVisitor`, …).
    */
   private workspaceScope = () =>
-    buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, messages);
+    and(
+      buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, messages),
+      or(
+        isNull(messages.topicId),
+        inArray(
+          messages.topicId,
+          this.db
+            .select({ id: topics.id })
+            .from(topics)
+            .where(
+              buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, topics),
+            ),
+        ),
+      ),
+    );
 
   /**
    * Default visitor exclusion applied by {@link ownership} — see
@@ -1080,6 +1142,7 @@ export class MessageModel {
   query = async (
     {
       agentId,
+      before,
       current = 0,
       includeFileWorks,
       pageSize = 1000,
@@ -1180,6 +1243,7 @@ export class MessageModel {
       const threadScopeCondition = topicId ? this.matchTopic(topicId) : agentCondition;
       const messageItems = await this.queryWithWhere({
         allowShareVisitor: effectiveIncludeVisitor,
+        before,
         current,
         includeFileWorks,
         pageSize,
@@ -1209,6 +1273,7 @@ export class MessageModel {
 
       const messageItems = await this.queryWithWhere({
         allowShareVisitor: effectiveIncludeVisitor,
+        before,
         current,
         includeFileWorks,
         pageSize,
@@ -1242,6 +1307,7 @@ export class MessageModel {
 
     const messageItems = await this.queryWithWhere({
       allowShareVisitor: effectiveIncludeVisitor,
+      before,
       current,
       includeFileWorks,
       pageSize,
@@ -1345,6 +1411,9 @@ export class MessageModel {
     const [items, totalResult] = await Promise.all([
       this.db
         .select({
+          agentId: messages.agentId,
+          error: messages.error,
+          metadata: messages.metadata,
           content: messages.content,
           createdAt: messages.createdAt,
           id: messages.id,
@@ -1368,6 +1437,8 @@ export class MessageModel {
     return {
       items: items.map(({ tools, ...message }) => ({
         ...message,
+        error: message.error as ChatMessageError | null,
+        metadata: message.metadata as MessageMetadata | null,
         tools: Array.isArray(tools) ? (tools as ChatToolPayload[]) : null,
       })),
       total: totalResult[0]?.count ?? 0,
@@ -1420,6 +1491,7 @@ export class MessageModel {
   queryWithWhere = async (options: QueryMessagesOptions = {}): Promise<UIChatMessage[]> => {
     const {
       where,
+      before,
       current = 0,
       includeFileWorks,
       pageSize = 1000,
@@ -1436,6 +1508,16 @@ export class MessageModel {
     // instance's `includeShareVisitor` so either widens the scope.
     const scope =
       allowShareVisitor || this.includeShareVisitor ? this.workspaceScope() : this.ownership();
+
+    // Round-cursor paging: only rows strictly older than the `(createdAt, id)`
+    // tuple. The id tie-break mirrors the sort order below, so rows sharing a
+    // createdAt with the cursor are neither skipped nor duplicated.
+    const beforeCondition = before
+      ? or(
+          lt(messages.createdAt, before.createdAt),
+          and(eq(messages.createdAt, before.createdAt), lt(messages.id, before.id)),
+        )
+      : undefined;
 
     // 1. get basic messages with joins, excluding messages that belong to MessageGroups
     const result = await runTimedStage(
@@ -1512,6 +1594,7 @@ export class MessageModel {
               // Filter out messages that belong to MessageGroups
               isNull(messages.messageGroupId),
               where,
+              beforeCondition,
             ),
           )
           .leftJoin(messagePlugins, eq(messagePlugins.id, messages.id))
@@ -1546,15 +1629,14 @@ export class MessageModel {
     // round with no user message in view is kept whole (the proper fix for those
     // is lazy step loading). Thread queries pass no `topicId` and are untouched.
     //
-    // Scope: this only serves the single "most recent page" load (`current === 0`),
-    // which is the only page the chat read path ever requests — `current`/`pageSize`
-    // offset paging is dead code here (the very premise of). The trim is
-    // deliberately NOT offset-exact: the rows it drops from page 0 also fall outside
-    // page 1's `offset = pageSize` window, so a hypothetical offset walk would skip
-    // them. That is acceptable because nothing offset-walks this path; loading older
-    // history is round-cursor based (see the follow-up), which supersedes offset
-    // paging entirely and closes that gap by construction.
-    if (topicId && current === 0 && result.length >= pageSize) {
+    // Scope: this serves the single "most recent page" load (`current === 0`)
+    // and the round-cursor `before` pages that walk older history — the only
+    // shapes the chat read path requests; `current`/`pageSize` offset paging is
+    // dead code here (the very premise of). The trim is deliberately NOT
+    // offset-exact: rows dropped from one page reappear at the TOP of the next
+    // `before` page (its cursor is the trimmed page's oldest kept row), so the
+    // round-cursor walk loses nothing by construction.
+    if (topicId && (current === 0 || before) && result.length >= pageSize) {
       const firstRoundStart = result.findIndex((message) => message.role === 'user');
       if (firstRoundStart > 0) result.splice(0, firstRoundStart);
     }
@@ -1564,6 +1646,7 @@ export class MessageModel {
     const messageGroupNodesPromise = this.queryMessageGroupNodesForPage({
       allowShareVisitor: allowShareVisitor || this.includeShareVisitor,
       current,
+      hasBeforeCursor: !!before,
       postProcessUrl,
       result,
       timing,
@@ -1671,7 +1754,8 @@ export class MessageModel {
                   name === null
                     ? { fileType: '', id, inaccessible: true, name: '', size: 0, url: '' }
                     : {
-                        content: documentsMap[id],
+                        content: documentsMap[id]?.content,
+                        originalCharCount: documentsMap[id]?.originalCharCount,
                         fileType: fileType!,
                         id,
                         name,
@@ -1738,6 +1822,7 @@ export class MessageModel {
   private queryMessageGroupNodesForPage = async ({
     allowShareVisitor,
     current,
+    hasBeforeCursor,
     postProcessUrl,
     result,
     timing,
@@ -1754,6 +1839,13 @@ export class MessageModel {
      */
     allowShareVisitor?: boolean;
     current: number;
+    /**
+     * The page was fetched with a round-cursor (`before`): scope group nodes to
+     * the page's time window instead of the whole topic — page 0 already
+     * returned every group node, so an unwindowed fetch here would only
+     * duplicate them.
+     */
+    hasBeforeCursor?: boolean;
     postProcessUrl?: (
       path: string | null,
       file: { fileType: string; id?: string | null },
@@ -1765,7 +1857,7 @@ export class MessageModel {
     if (!topicId) return [];
 
     if (result.length === 0) {
-      if (current !== 0) return [];
+      if (current !== 0 || hasBeforeCursor) return [];
 
       return runTimedStage(
         timing,
@@ -1778,7 +1870,7 @@ export class MessageModel {
       );
     }
 
-    if (current === 0) {
+    if (current === 0 && !hasBeforeCursor) {
       return runTimedStage(
         timing,
         'db.message.queryWithWhere.messageGroups',
@@ -1889,22 +1981,14 @@ export class MessageModel {
       'db.message.queryWithWhere.documents.select',
       () =>
         this.db
-          .select({
-            content: documents.content,
-            fileId: documents.fileId,
-          })
+          .select(fileDocumentColumns)
           .from(documents)
-          .where(inArray(documents.fileId, fileIds)),
+          .where(and(inArray(documents.fileId, fileIds), notFileBackedPlaceholder()))
+          .orderBy(...fileDocumentsOrder),
       { fileCount: fileIds.length },
     );
 
-    const documentsMap = documentsList.reduce(
-      (acc, doc) => {
-        if (doc.fileId) acc[doc.fileId] = doc.content as string;
-        return acc;
-      },
-      {} as Record<string, string>,
-    );
+    const documentsMap = toFileDocumentsMap(documentsList);
 
     return { documentsMap, relatedFileList };
   };
@@ -2278,24 +2362,16 @@ export class MessageModel {
       .map((file) => file.id)
       .filter(Boolean);
 
-    let documentsMap: Record<string, string> = {};
+    let documentsMap: FileDocumentsMap = {};
 
     if (fileIds.length > 0) {
       const documentsList = await this.db
-        .select({
-          content: documents.content,
-          fileId: documents.fileId,
-        })
+        .select(fileDocumentColumns)
         .from(documents)
-        .where(inArray(documents.fileId, fileIds));
+        .where(and(inArray(documents.fileId, fileIds), notFileBackedPlaceholder()))
+        .orderBy(...fileDocumentsOrder);
 
-      documentsMap = documentsList.reduce(
-        (acc, doc) => {
-          if (doc.fileId) acc[doc.fileId] = doc.content as string;
-          return acc;
-        },
-        {} as Record<string, string>,
-      );
+      documentsMap = toFileDocumentsMap(documentsList);
     }
 
     const imageList = relatedFileList.filter((i) => (i.fileType || '').startsWith('image'));
@@ -2376,7 +2452,8 @@ export class MessageModel {
               name === null
                 ? { fileType: '', id, inaccessible: true, name: '', size: 0, url: '' }
                 : {
-                    content: documentsMap[id],
+                    content: documentsMap[id]?.content,
+                    originalCharCount: documentsMap[id]?.originalCharCount,
                     fileType: fileType!,
                     id,
                     name,
@@ -2691,7 +2768,18 @@ export class MessageModel {
       where: and(
         this.ownership(),
         eq(messages.agentId, agentId),
-        eq(messages.topicId, topicId),
+        inArray(
+          messages.topicId,
+          this.db
+            .select({ id: topics.id })
+            .from(topics)
+            .where(
+              and(
+                eq(topics.id, topicId),
+                buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, topics),
+              ),
+            ),
+        ),
         eq(messages.threadId, threadId),
         eq(messages.role, 'assistant'),
       ),
@@ -2705,7 +2793,7 @@ export class MessageModel {
   findVerifyMessageByOperationId = async (operationId: string) => {
     return this.db.query.messages.findFirst({
       where: and(
-        eq(messages.userId, this.userId),
+        this.ownership(),
         eq(messages.role, 'verify'),
         sql`${messages.metadata}->>'verifyOperationId' = ${operationId}`,
       ),
@@ -2732,8 +2820,19 @@ export class MessageModel {
   }) => {
     return this.db.query.messages.findFirst({
       where: and(
-        eq(messages.userId, this.userId),
-        eq(messages.topicId, topicId),
+        this.ownership(),
+        inArray(
+          messages.topicId,
+          this.db
+            .select({ id: topics.id })
+            .from(topics)
+            .where(
+              and(
+                eq(topics.id, topicId),
+                buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, topics),
+              ),
+            ),
+        ),
         eq(messages.role, 'assistant'),
         sql`${messages.metadata}->>'operationId' = ${operationId}`,
       ),
@@ -3263,6 +3362,7 @@ export class MessageModel {
     files,
     model: fromModel,
     plugin,
+    pluginError,
     pluginIntervention,
     pluginState,
     provider: fromProvider,
@@ -3282,6 +3382,7 @@ export class MessageModel {
       fileChunks,
       files,
       plugin,
+      pluginError,
       pluginIntervention,
       pluginState,
       ragQueryId,
@@ -3323,6 +3424,7 @@ export class MessageModel {
       fileChunks,
       files,
       plugin,
+      pluginError,
       pluginIntervention,
       pluginState,
       ragQueryId,
@@ -3338,6 +3440,9 @@ export class MessageModel {
         trx.insert(messagePlugins).values({
           apiName: clampToolIdentifier(plugin?.apiName),
           arguments: sanitizeNullBytes(plugin?.arguments),
+          // A tool that fails on its first write only has pluginError to explain
+          // itself; without it the model reads an empty tool result.
+          error: sanitizeNullBytes(pluginError),
           id,
           identifier: clampToolIdentifier(plugin?.identifier),
           intervention: pluginIntervention,
@@ -3904,6 +4009,47 @@ export class MessageModel {
       type: row.type ?? 'default',
       userId: row.userId,
     }));
+  };
+
+  /**
+   * The `state` of the most recent call to one tool API in a topic that
+   * produced any — a failed or aborted call leaves no state. Lets a tool read
+   * back what an earlier call in the same conversation produced, e.g. the group
+   * a builder conversation last created with `createGroup`.
+   *
+   * Scoped like a message query for the same branch: without `threadId` only
+   * the main conversation counts; with it, the thread plus the parent messages
+   * its type inherits — never a sibling thread.
+   */
+  findLatestPluginStateInTopic = async (params: {
+    apiName: string;
+    identifier: string;
+    threadId?: string | null;
+    topicId: string;
+  }): Promise<Record<string, any> | undefined> => {
+    const threadCondition = params.threadId
+      ? await this.buildThreadQueryCondition(params.threadId)
+      : isNull(messages.threadId);
+
+    const [row] = await this.db
+      .select({ state: messagePlugins.state })
+      .from(messagePlugins)
+      .innerJoin(messages, eq(messagePlugins.id, messages.id))
+      .where(
+        and(
+          eq(messages.topicId, params.topicId),
+          threadCondition,
+          eq(messagePlugins.identifier, params.identifier),
+          eq(messagePlugins.apiName, params.apiName),
+          isNotNull(messagePlugins.state),
+          this.ownership(),
+          this.pluginsOwnership(),
+        ),
+      )
+      .orderBy(desc(messages.createdAt), desc(messages.id))
+      .limit(1);
+
+    return row?.state ?? undefined;
   };
 
   /**
